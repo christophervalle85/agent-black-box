@@ -28,7 +28,7 @@ The existing dashboard on `127.0.0.1:4317` is the approval controller. All MCP l
 On a new **stdio connection**, the gateway pins one of two protocol eras:
 
 - **Legacy `2025-11-25`:** `initialize` followed by `notifications/initialized`, then `tools/list`, `tools/call`, `ping`, cancellation. The downstream receives its own separate legacy handshake and initialized notification **before tool discovery**.
-- **Modern `2026-07-28`:** `server/discover` with `params._meta` protocol version/client capabilities; no initialize handshake; version/identity/capabilities validated **for each request**. `tools/list` and `tools/call` respond with modern `resultType: "complete"` and `_meta['io.modelcontextprotocol/serverInfo']`. Unknown versions receive `-32022` with supported versions. A connection cannot switch eras.
+- **Modern `2026-07-28`:** Optional `server/discover` with `params._meta` protocol version/client capabilities; or direct `tools/list`/`tools/call` with per-request metadata; no initialize handshake; version/identity/capabilities validated **for each request**. `tools/list` and `tools/call` respond with modern `resultType: "complete"` and `_meta['io.modelcontextprotocol/serverInfo']`. Unknown versions receive `-32022` with supported versions. A connection cannot switch eras.
 
 There is **no direct network MCP listener**. Other RPC families including resources, prompts, sampling, subscriptions, task extensions, and multi-round-trip `input_required` are not supported. Modern `ping` is not a supported method. Only `read_note` and `write_note` are exposed; downstream `shell_command` remains hidden and denied. Tool-call results are limited to the bundled text-only notes server.
 

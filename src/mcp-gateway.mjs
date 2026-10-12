@@ -127,7 +127,15 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
       try{await ensureDownstream();}catch{return error(id,-32000,'MCP downstream initialization failed.');}
       return answer(id,{protocolVersion:LEGACY,capabilities:{tools:{}},serverInfo:IDENTITY});
     }
-    if(!era)return error(id,-32002,'Initialize or discover the MCP server first.');
+    // Modern clients MAY skip discovery and send a versioned tools/list or
+    // tools/call immediately (notably SDK v2 with a pinned/cached era).
+    // The per-request metadata, not server/discover, is the authority.
+    if(!era && versionMeta(msg.params)!==undefined){
+      if(!checkModern(id,msg.params))return;
+      era='modern';
+      try{await ensureDownstream();}catch{return error(id,-32000,'MCP downstream unavailable.');}
+    }
+    if(!era)return error(id,-32002,'Initialize or send a versioned modern request first.');
     if(era==='legacy' && !initialized)return error(id,-32002,'Legacy MCP session not initialized.');
     if(era==='modern' && !checkModern(id,msg.params))return;
     if(method==='ping' && era==='legacy')return answer(id,{});

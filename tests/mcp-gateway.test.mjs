@@ -237,3 +237,11 @@ test('legacy stdio and modern stdio cannot switch eras mid-connection',()=>fixtu
   const modernProbe=await client.request('server/discover',modern()).p;
   assert.equal(modernProbe.error.code,-32601);
 }));
+
+test('modern stdio: direct tools/list without discover is accepted, as MCP v2 permits',()=>fixture(async({client})=>{
+  const list=await client.request('tools/list',modern()).p;
+  assert.equal(list.result.resultType,'complete');
+  const read=await client.request('tools/call',modern({name:'read_note',arguments:{path:'notes.txt'}})).p;
+  assert.equal(read.result.isError,undefined);
+  assert.match(read.result.content[0].text,/MCP integration test/);
+}));
