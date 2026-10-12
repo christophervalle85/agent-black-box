@@ -36,3 +36,17 @@
 .approval-action:disabled{opacity:.55;cursor:wait}
 .approval-empty{color:#94a7c0;font-size:12px;padding:26px 4px}
 @media(max-width:680px){.approval-list{padding:10px 15px 20px}.approval-actions{justify-content:stretch}.approval-action{flex:1}}
+
+/* v0.3 audit lifecycle: one visible request with full append-only history */
+.lifecycle-count{display:block;color:#8ea4c8;font-size:10px;margin-top:5px}
+.audit-timeline{border-top:1px solid #33425b;margin-top:12px;padding-top:16px}
+.audit-timeline h3{font-size:12px;color:#e4edfa;margin:0 0 14px}
+.audit-timeline-item{border-left:2px solid #50678f;padding:0 0 18px 15px;margin-left:5px}
+.audit-timeline-item:last-child{padding-bottom:0}
+.audit-timeline-header{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:11px;color:#e0eafd}
+.audit-timeline-header time{color:#889db9;font-size:10px}
+.audit-timeline-detail{color:#96add0;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;margin-top:6px}
+.audit-timeline-item p{font-size:11px;color:#9cacc5;line-height:1.6;margin:6px 0 0}
+
+/* Scroll detailed histories inside the viewport on small screens. */
+#event-dialog{max-height:85vh;overflow-y:auto}

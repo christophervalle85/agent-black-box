@@ -1,4 +1,4 @@
-const state = { events: [], policies: [], approvals: [], filter: 'all', view: 'overview', selected: null };
+const state = { activity: [], policies: [], approvals: [], filter: 'all', view: 'overview', selected: null };
 const $ = id => document.getElementById(id);
 const text = (node, value) => { node.textContent = String(value); };
 const ago = timestamp => {
@@ -29,23 +29,24 @@ async function fetchJson(path, options) {
 }
 async function refresh() {
   const [ev, stats, pol] = await Promise.all([
-    fetchJson('/api/events?limit=300'), fetchJson('/api/stats'), fetchJson('/api/policies')
+    fetchJson('/api/activity?limit=300'), fetchJson('/api/stats'), fetchJson('/api/policies')
   ]);
-  state.events = ev.events;
+  state.activity = ev.activity;
   state.policies = pol.policies;
   text($('total-value'), stats.total);
   text($('allowed-value'), stats.allowed);
   text($('blocked-value'), stats.blocked);
   text($('risk-value'), stats.highRisk);
   text($('nav-count'), stats.total);
+  text($('audit-event-count'), `${stats.auditEvents} underlying audit events in current window`);
   text($('policy-count'), `${pol.policies.length} active`);
   render();
 }
 function renderRecent() {
   const parent = $('recent-activity');
   parent.replaceChildren();
-  if (!state.events.length) { parent.append(empty()); return; }
-  for (const event of state.events.slice(0, 6)) {
+  if (!state.activity.length) { parent.append(empty()); return; }
+  for (const event of state.activity.slice(0, 6)) {
     const item = make('button', 'recent-event');
     item.type = 'button';
     const icon = make('div', `event-icon ${event.decision}`, event.decision === 'allow' ? '✓' : event.decision === 'review' ? '!' : '×');
@@ -61,7 +62,10 @@ function renderRecent() {
 function renderTable() {
   const body = $('event-table');
   body.replaceChildren();
-  const filtered = state.events.filter(e => state.filter === 'all' || e.decision === state.filter);
+  const filtered = state.activity.filter(item =>
+    state.filter === 'all' || (state.filter === 'reviewed'
+      ? item.events.some(e => e.decision === 'review')
+      : item.decision === state.filter));
   if (!filtered.length) {
     const cell = make('td'); cell.colSpan = 7; cell.append(empty('No matching events'));
     const row = make('tr'); row.append(cell); body.append(row);
@@ -70,9 +74,10 @@ function renderTable() {
     const row = make('tr');
     row.tabIndex = 0;
     row.setAttribute('aria-label', `Inspect ${event.tool} ${statusLabel(event)}`);
-    const time = make('td', '', new Date(event.timestamp).toLocaleTimeString());
+    const time = make('td', '', new Date(event.startedAt ?? event.timestamp).toLocaleTimeString());
     const toolCell = make('td');
     toolCell.append(make('span', 'tool-name', event.tool), make('span', 'tool-agent', event.agentId));
+    if (event.auditEventCount > 1) toolCell.append(make('span', 'lifecycle-count', `${event.auditEventCount} linked events`));
     const decision = make('td'); decision.append(make('span', `status ${event.decision}`, statusLabel(event)));
     const risk = make('td'); risk.append(make('span', `risk-pill ${event.risk}`, `${event.risk} · ${event.riskScore}`));
     const rule = make('td', 'mono', event.ruleId);
@@ -82,7 +87,7 @@ function renderTable() {
     row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showEvent(event); } });
     body.append(row);
   }
-  text($('table-foot'), `Showing ${filtered.length} recent events · audit history stored locally`);
+  text($('table-foot'), `Showing ${filtered.length} tool requests · ${filtered.reduce((total, item) => total + item.auditEventCount, 0)} linked audit events · stored locally`);
 }
 function renderPolicies() {
   const parent = $('policy-list'); parent.replaceChildren();
@@ -113,12 +118,33 @@ function showEvent(event) {
     ['Timestamp', new Date(event.timestamp).toLocaleString()],
     ['Elapsed', `${event.durationMs} ms`],
     ['Approval ID', event.approvalId ?? 'None', 'mono'],
-    ['Event ID', event.id, 'mono']
+    ['Tool request ID', event.id, 'mono'],
+    ['Latest audit event ID', event.latestEventId ?? event.id, 'mono']
   ];
   for (const [title, value, color = ''] of fields) {
     const row = make('div', 'dialog-field');
     row.append(make('span', 'dialog-label', title), make('div', `dialog-value ${color}`, value));
     body.append(row);
+  }
+  // The audit stream is immutable: show the complete lifecycle behind this
+  // single tool-request row rather than overwriting its historical decisions.
+  const history = event.events ?? [event];
+  if (history.length > 1) {
+    const timeline = make('section', 'audit-timeline');
+    timeline.append(make('h3', '', `Decision timeline · ${history.length} audit events`));
+    for (const [index, step] of history.entries()) {
+      const entry = make('div', 'audit-timeline-item');
+      const header = make('div', 'audit-timeline-header');
+      const title = step.decision === 'review' ? 'Approval requested' :
+        step.ruleId === 'APPROVAL_DENIED' ? 'Approval denied' :
+        step.ruleId === 'APPROVAL_GRANTED' ? 'Approval granted and action completed' :
+        step.decision === 'block' ? 'Request blocked' : 'Action allowed';
+      header.append(make('strong', '', `${index + 1}. ${title}`), make('time', '', new Date(step.timestamp).toLocaleTimeString()));
+      entry.append(header, make('div', 'audit-timeline-detail', `${step.ruleId} · ${step.outcome}`),
+        make('p', '', step.summary || step.reason));
+      timeline.append(entry);
+    }
+    body.append(timeline);
   }
   content.append(body); $('event-dialog').showModal();
 }

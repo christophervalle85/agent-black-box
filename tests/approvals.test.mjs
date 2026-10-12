@@ -130,6 +130,23 @@ test('HTTP approval round-trip pauses agent, rejects CSRF, and only resumes afte
     assert.equal(body.toolCalls,1);
     assert.equal(body.events[0].ruleId,'APPROVAL_GRANTED');
     assert.equal(readFileSync(join(ctx.workspaceRoot,'api-note.txt'),'utf8'),'Approved from HTTP');
+    const activityResponse = await fetch(base + '/api/activity');
+    assert.equal(activityResponse.status, 200);
+    const { activity } = await activityResponse.json();
+    assert.equal(activity.length, 1);
+    assert.equal(activity[0].auditEventCount, 2);
+    assert.equal(activity[0].ruleId, 'APPROVAL_GRANTED');
+    assert.deepEqual(activity[0].events.map(event => event.decision), ['review', 'allow']);
+    const pendingFilter = await (await fetch(base + '/api/activity?decision=review')).json();
+    assert.equal(pendingFilter.activity.length, 0);
+    const reviewHistory = await (await fetch(base + '/api/activity?decision=reviewed')).json();
+    assert.equal(reviewHistory.activity.length, 1);
+    const stats = await (await fetch(base + '/api/stats')).json();
+    assert.equal(stats.total, 1);
+    assert.equal(stats.auditEvents, 2);
+    assert.equal(stats.allowed, 1);
+    assert.equal(stats.pending, 0);
+
   } finally {
     await new Promise(resolve=>server.close(resolve));
   }

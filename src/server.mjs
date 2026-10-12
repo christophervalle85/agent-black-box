@@ -50,6 +50,9 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     if (req.method === 'GET' && url.pathname === '/api/events') {
       return sendJson(res, 200, { events: store.list({ limit: url.searchParams.get('limit') ?? 300, decision: url.searchParams.get('decision'), runId: url.searchParams.get('runId') }) });
     }
+    if (req.method === 'GET' && url.pathname === '/api/activity') {
+      return sendJson(res, 200, { activity: store.activity({ limit: url.searchParams.get('limit') ?? 300, decision: url.searchParams.get('decision'), runId: url.searchParams.get('runId') }) });
+    }
     if (req.method === 'GET' && url.pathname === '/api/stats') return sendJson(res, 200, store.stats());
     if (req.method === 'GET' && url.pathname === '/api/policies') return sendJson(res, 200, { policies: POLICIES });
     if (req.method === 'GET' && url.pathname === '/api/approvals') {

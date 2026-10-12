@@ -93,6 +93,10 @@ The agent can read eligible local files and, **only after one-time human approva
 | `DENY_UNKNOWN_TOOL` | Reject unregistered tools |
 | `INVALID_INPUT` | Reject malformed tool-call arguments |
 
+### Activity and audit history
+
+Approval requests produce **two append-only audit events**: `REQUIRE_NOTE_APPROVAL` followed by `APPROVAL_GRANTED` or `APPROVAL_DENIED`. The Activity log displays **one tool request** with its current decision and a full chronological decision timeline in the details dialog. The original records are never rewritten. `GET /api/events` still returns the raw records; `GET /api/activity` returns grouped tool requests with `events[]`, stable request IDs, and the final outcome. Filter `decision=review` shows **currently pending** requests; `decision=reviewed` shows every request that entered review, including completed approvals and denials. The dashboard totals count unique requests (not audit lifecycle transitions); the statistics API additionally exposes `auditEvents`. All views are scoped to the latest **1,000 underlying audit events**, so boundary-spanning requests can have partial history; this is not a lifetime analytics store. After a crash, an orphaned pending event may still appear until a separate reconciliation feature is added.
+
 The model sees friendly function names (`read_file`, `fetch_docs`, `run_shell`), which are mapped to the existing guarded adapters (`file.read`, `network.fetch`, `shell.exec`). You can inspect the internal tool names and rules in the audit log.
 
 ## API endpoints
@@ -102,8 +106,9 @@ The model sees friendly function names (`read_file`, `fetch_docs`, `run_shell`),
 | `GET /api/health` | Service health and version |
 | `GET /api/agent/status` | Ollama connectivity and configured model availability |
 | `POST /api/agent/run` | Execute one model-driven task and return answer + audit records |
-| `GET /api/events?limit=300&decision=block` | Recent audit events |
-| `GET /api/stats` | Audit statistics |
+| `GET /api/events?limit=300&decision=block` | Original append-only audit events (raw, ungrouped) |
+| `GET /api/activity?limit=300&decision=block` | Tool requests grouped by `approvalId`, with chronological `events` history |
+| `GET /api/stats` | Unique tool-request statistics (`auditEvents` counts underlying records separately) |
 | `GET /api/policies` | Rules presented in the UI |
 | `GET /api/stream` | Live SSE audit stream |
 | `GET /api/approvals` | Pending reviews (including note content) on loopback only |
@@ -121,7 +126,8 @@ src/server.mjs         Local HTTP API, static assets, SSE
 src/policy.mjs         Deterministic tool approval/denial rules
 src/monitor.mjs        Pre-execution wrapper and redacted audit metadata
 src/tools.mjs          Guarded file read/new-note write and fake documentation adapters
-src/audit.mjs          Append-only JSONL event storage
+src/audit.mjs          Append-only JSONL event storage and grouped statistics
+src/activity.mjs       Immutable event-to-tool-request lifecycle projection
 src/demo.mjs           Nine scripted regression scenarios
 public/                Browser dashboard and real-agent prompt UI
 examples/run-agent.mjs Run a real model-driven task from the command line
