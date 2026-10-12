@@ -23,7 +23,7 @@ MCP_SANDBOX=required npm run mcp:smoke
 MCP_SANDBOX=required npm run mcp:modern
 ```
 
-Both commands must pass. In particular, merely seeing `bwrap --version` succeed does **not** prove user namespaces can be created. An actual MCP call must succeed. If it fails, do **not** silently switch to `off` for untrusted servers; investigate OS namespace policy first.
+Both commands must pass on a **Linux host configured to permit user and network namespaces**. GitHub-hosted Ubuntu CI can deny Bubblewrap network-namespace setup (`Failed RTM_NEWADDR: Operation not permitted`); our CI documents that host limitation and verifies fail-closed behavior rather than presenting it as a successful sandbox run. Full isolated execution remains an additional acceptance test on a compatible Linux machine. In particular, merely seeing `bwrap --version` succeed does **not** prove user namespaces can be created. An actual MCP call must succeed. If it fails, do **not** silently switch to `off` for untrusted servers; investigate OS namespace policy first.
 
 ### macOS users
 

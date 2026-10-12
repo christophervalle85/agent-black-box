@@ -42,7 +42,7 @@ No cloud API key or npm dependency installation is required. The model download 
 
 See the [OS sandboxing and audit integrity operator guide](docs/SANDBOX_AUDIT.md), grounded in the official Bubblewrap manual, Apple App Sandbox, NIST HMAC specification and OWASP logging guidance.
 
-**macOS (including Apple Silicon):** An ordinary Node subprocess is **not** covered by Apple's signed App Sandbox. `MCP_SANDBOX=required` therefore refuses to run; the default local demo remains `off`. Linux users can opt into strict namespace sandboxing with Bubblewrap; failure never silently downgrades.
+**macOS (including Apple Silicon):** An ordinary Node subprocess is **not** covered by Apple's signed App Sandbox. `MCP_SANDBOX=required` therefore refuses to run; the default local demo remains `off`. Linux users can opt into strict namespace sandboxing with Bubblewrap; failure never silently downgrades. GitHub-hosted Linux currently restricts network-namespace setup; CI therefore verifies controlled fail-closed behavior there, and sandboxed execution still requires validation on a compatible Linux host.
 
 ```bash
 # Upgrade from v0.5 if data/audit.jsonl is nonempty (one-time, preserves old bytes):

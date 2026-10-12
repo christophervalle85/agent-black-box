@@ -73,6 +73,9 @@ export class McpPeer {
       },
       onError: error => this.close(error)
     });
+    // A sandbox launch can fail before or during the first JSON-RPC write.
+    // A closed stdin otherwise emits an unhandled EPIPE and crashes the gateway.
+    child.stdin?.on('error', error => this.close(error));
     child.on('exit', () => this.close(new Error('Downstream MCP process exited.')));
     child.on('error', error => this.close(error));
   }
