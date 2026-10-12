@@ -7,6 +7,8 @@ export const POLICIES = Object.freeze([
   { id: 'DENY_SENSITIVE_FILE', description: 'Block reads of credentials, private keys, and hidden configuration.', category: 'Data loss prevention' },
   { id: 'ALLOW_MOCK_DOCS', description: 'Simulate GET requests to docs.example.test only; make no network request.', category: 'Network' },
   { id: 'DENY_UNAPPROVED_EGRESS', description: 'Block all other network destinations, methods, and credentialed URLs.', category: 'Network' },
+  { id: 'REQUIRE_NOTE_APPROVAL', description: 'Creating a new plain-text note requires one-time human approval of its exact contents.', category: 'Human approval' },
+  { id: 'DENY_UNSAFE_WRITE', description: 'Reject sensitive, oversized, or non-note write attempts before review.', category: 'Filesystem' },
   { id: 'DENY_SHELL', description: 'Disallow arbitrary operating-system command execution.', category: 'Execution' },
   { id: 'DENY_UNKNOWN_TOOL', description: 'Unregistered tools are never executed.', category: 'Execution' }
 ]);
@@ -16,6 +18,7 @@ function outcome(decision, risk, ruleId, reason) {
 }
 const deny = (risk, ruleId, reason) => outcome('block', risk, ruleId, reason);
 const allow = (ruleId, reason) => outcome('allow', 'low', ruleId, reason);
+const review = (ruleId, reason) => outcome('review', 'medium', ruleId, reason);
 
 export function withinWorkspace(candidate, workspaceRoot) {
   const root = realpathSync(workspaceRoot);
@@ -66,6 +69,16 @@ export function evaluatePolicy(tool, args, workspaceRoot) {
         return deny(check.sensitive ? 'critical' : 'high', check.sensitive ? 'DENY_SENSITIVE_FILE' : 'DENY_PATH_ESCAPE', check.reason);
       }
       return allow('ALLOW_WORKSPACE_READ', 'Requested path is inside the workspace and is not a restricted filename.');
+    }
+    case 'file.write': {
+      const check = resolveWorkspaceFile(args.path, workspaceRoot);
+      if (!check.ok) return deny(check.sensitive ? 'critical' : 'high', check.sensitive ? 'DENY_SENSITIVE_FILE' : 'DENY_PATH_ESCAPE', check.reason);
+      if (!/^[a-z0-9][a-z0-9_-]{0,39}\.txt$/i.test(args.path) ||
+          typeof args.content !== 'string' || args.content.length < 1 ||
+          Buffer.byteLength(args.content, 'utf8') > 2000 || args.content.includes('\0')) {
+        return deny('high', 'DENY_UNSAFE_WRITE', 'Only new, top-level .txt notes with 1–2,000 bytes of content can be reviewed.');
+      }
+      return review('REQUIRE_NOTE_APPROVAL', 'Creating a new note requires explicit approval of its filename and full content.');
     }
     case 'network.fetch': {
       if (args.method !== 'GET' || typeof args.url !== 'string' || args.url.length > 2048) {

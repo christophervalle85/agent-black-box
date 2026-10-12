@@ -20,7 +20,7 @@ test('real multi-turn model protocol: allowed and blocked tool calls are audited
   let chats = 0;
   const chat = async ({ messages, tools }) => {
     chats++;
-    assert.deepEqual(tools.map(t => t.function.name), ['read_file', 'fetch_docs', 'run_shell']);
+    assert.deepEqual(tools.map(t => t.function.name), ['read_file', 'write_note', 'fetch_docs', 'run_shell']);
     if (chats === 1) return { role: 'assistant', content: '', tool_calls: [
       toolCall('read_file', { path: 'notes.txt' }),
       toolCall('read_file', { path: '.env' }),

@@ -1,4 +1,4 @@
-const state = { events: [], policies: [], filter: 'all', view: 'overview', selected: null };
+const state = { events: [], policies: [], approvals: [], filter: 'all', view: 'overview', selected: null };
 const $ = id => document.getElementById(id);
 const text = (node, value) => { node.textContent = String(value); };
 const ago = timestamp => {
@@ -19,7 +19,7 @@ const empty = (label = 'No activity to display') => {
   box.append(make('div', 'empty-icon', '◇'), make('strong', '', label), make('p', '', 'Run the demo agent to generate real policy decisions and explore its audit trail.'));
   return box;
 };
-const statusLabel = event => event.decision === 'block' ? 'Blocked' : event.outcome === 'error' ? 'Failed' : event.outcome === 'simulated' ? 'Simulated' : 'Allowed';
+const statusLabel = event => event.decision === 'review' ? 'Pending review' : event.decision === 'block' ? 'Blocked' : event.outcome === 'error' ? 'Failed' : event.outcome === 'simulated' ? 'Simulated' : 'Allowed';
 
 async function fetchJson(path, options) {
   const response = await fetch(path, options);
@@ -48,7 +48,7 @@ function renderRecent() {
   for (const event of state.events.slice(0, 6)) {
     const item = make('button', 'recent-event');
     item.type = 'button';
-    const icon = make('div', `event-icon ${event.decision}`, event.decision === 'allow' ? '✓' : '×');
+    const icon = make('div', `event-icon ${event.decision}`, event.decision === 'allow' ? '✓' : event.decision === 'review' ? '!' : '×');
     const main = make('div', 'event-main');
     main.append(make('strong', '', event.tool), make('small', '', `${event.agentId}  ·  ${event.ruleId}`));
     const side = make('div', 'event-side');
@@ -73,7 +73,7 @@ function renderTable() {
     const time = make('td', '', new Date(event.timestamp).toLocaleTimeString());
     const toolCell = make('td');
     toolCell.append(make('span', 'tool-name', event.tool), make('span', 'tool-agent', event.agentId));
-    const decision = make('td'); decision.append(make('span', `status ${event.decision}`, event.decision === 'block' ? 'Blocked' : 'Allowed'));
+    const decision = make('td'); decision.append(make('span', `status ${event.decision}`, statusLabel(event)));
     const risk = make('td'); risk.append(make('span', `risk-pill ${event.risk}`, `${event.risk} · ${event.riskScore}`));
     const rule = make('td', 'mono', event.ruleId);
     const outcome = make('td', '', event.outcome);
@@ -88,7 +88,7 @@ function renderPolicies() {
   const parent = $('policy-list'); parent.replaceChildren();
   for (const policy of state.policies) {
     const item = make('div', 'policy-item');
-    item.append(make('div', 'policy-item-icon', policy.id.startsWith('DENY') ? '⊘' : '✓'));
+    item.append(make('div', 'policy-item-icon', policy.id.startsWith('DENY') ? '⊘' : policy.id.startsWith('REQUIRE') ? '◷' : '✓'));
     const content = make('div');
     content.append(make('h3', '', policy.id), make('p', '', policy.description));
     item.append(content, make('span', 'policy-category', policy.category));
@@ -101,7 +101,7 @@ function showEvent(event) {
   text($('dialog-title'), event.tool);
   const body = make('div', 'dialog-body');
   const fields = [
-    ['Decision', event.decision === 'block' ? 'BLOCKED — execution was prevented' : 'ALLOWED — passed pre-execution policy', event.decision === 'block' ? 'red-text' : 'green-text'],
+    ['Decision', event.decision === 'review' ? 'AWAITING APPROVAL — no execution' : event.decision === 'block' ? 'BLOCKED — execution was prevented' : 'ALLOWED — passed pre-execution policy', event.decision === 'block' ? 'red-text' : event.decision === 'review' ? '' : 'green-text'],
     ['Policy rule', event.ruleId, 'mono'],
     ['Reason', event.reason],
     ['Risk assessment', `${event.risk.toUpperCase()} (${event.riskScore}/100)`],
@@ -112,6 +112,7 @@ function showEvent(event) {
     ['Run ID', event.runId, 'mono'],
     ['Timestamp', new Date(event.timestamp).toLocaleString()],
     ['Elapsed', `${event.durationMs} ms`],
+    ['Approval ID', event.approvalId ?? 'None', 'mono'],
     ['Event ID', event.id, 'mono']
   ];
   for (const [title, value, color = ''] of fields) {
@@ -123,10 +124,10 @@ function showEvent(event) {
 }
 function navigate(view) {
   state.view = view;
-  const labels = { overview: ['Security overview', 'Monitor every agent action. Understand every security decision.', 'Overview'], agent: ['Local AI agent', 'Give a real model a task and observe guarded tool calls in real time.', 'AI agent'], activity: ['Activity log', 'Explore decisions, risk classifications and execution outcomes.', 'Activity log'], policies: ['Security policies', 'Review the rules protecting instrumented tools.', 'Security policies'] };
+  const labels = { overview: ['Security overview', 'Monitor every agent action. Understand every security decision.', 'Overview'], agent: ['Local AI agent', 'Give a real model a task and observe guarded tool calls in real time.', 'AI agent'], approvals: ['Human approvals', 'Inspect and authorize individual pending tool requests.', 'Approvals'], activity: ['Activity log', 'Explore decisions, risk classifications and execution outcomes.', 'Activity log'], policies: ['Security policies', 'Review the rules protecting instrumented tools.', 'Security policies'] };
   const [title, subtitle, crumb] = labels[view];
   text($('page-title'), title); text($('page-subtitle'), subtitle); text($('page-crumb'), crumb);
-  for (const section of ['overview', 'agent', 'activity', 'policies']) $(section + '-view').classList.toggle('hidden', section !== view);
+  for (const section of ['overview', 'agent', 'approvals', 'activity', 'policies']) $(section + '-view').classList.toggle('hidden', section !== view);
   for (const button of document.querySelectorAll('.nav-item')) button.classList.toggle('active', button.dataset.view === view);
 }
 let toastTimeout;
@@ -161,7 +162,7 @@ async function runRealAgent() {
   const button = $('run-agent'); button.disabled = true;
   text(button, 'Running… (model may take a while)');
   text($('agent-result-status'), 'RUNNING');
-  text($('agent-answer'), 'Waiting for Ollama. Any tool calls will be audited as they occur…');
+  text($('agent-answer'), 'Waiting for Ollama. Any write_note request will pause for a decision in the approval panel below…');
   $('agent-run-meta').replaceChildren(); $('agent-run-events').replaceChildren();
   try {
     const result = await fetchJson('/api/agent/run', {
@@ -183,7 +184,7 @@ async function runRealAgent() {
     text($('agent-answer'), `Agent could not run: ${error.message}`);
     toast(error.message);
     checkAgentModel();
-  } finally { button.disabled = false; text(button, '✧ Run with local LLM ↗'); }
+  } finally { button.disabled = false; text(button, '✧ Run with local LLM ↗'); refreshApprovals().catch(() => {}); }
 }
 $('run-agent').addEventListener('click', runRealAgent);
 $('check-model').addEventListener('click', checkAgentModel);
@@ -208,3 +209,45 @@ try {
 } catch { text($('connection-label'), 'Offline'); }
 // Safe fallback when SSE is unavailable.
 setInterval(() => refresh().catch(() => {}), 30000);
+
+async function refreshApprovals() {
+  const data = await fetchJson('/api/approvals');
+  state.approvals = data.pending;
+  text($('approval-count'), state.approvals.length);
+  for (const id of ['approvals-list', 'agent-approvals']) renderApprovals($(id));
+}
+function renderApprovals(parent) {
+  parent.replaceChildren();
+  if (!state.approvals.length) {
+    const item = make('p', 'approval-empty', 'No pending requests. Run the "Approval test" preset to see a human review.');
+    parent.append(item);
+    return;
+  }
+  for (const approval of state.approvals) {
+    const card = make('article', 'approval-card');
+    card.append(make('div', 'approval-kicker', `WRITE NOTE · ${approval.agentId} · Expires ${new Date(approval.expiresAt).toLocaleTimeString()}`),
+      make('h3', '', approval.filename),
+      make('p', 'approval-caption', 'Exact content that will be written if you approve:'),
+      make('pre', 'approval-content', approval.content));
+    const buttons = make('div', 'approval-actions');
+    for (const [decision, label] of [['deny', 'Deny request'], ['approve', 'Approve once']]) {
+      const button = make('button', `approval-action ${decision}`, label);
+      button.type = 'button';
+      button.addEventListener('click', async () => {
+        buttons.querySelectorAll('button').forEach(b => b.disabled = true);
+        try {
+          await fetchJson(`/api/approvals/${approval.id}/decision`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision })
+          });
+          toast(`Request ${decision === 'approve' ? 'approved' : 'denied'}`);
+        } catch (error) { toast(`Approval failed: ${error.message}`); }
+        await refreshApprovals().catch(() => {});
+      });
+      buttons.append(button);
+    }
+    card.append(buttons); parent.append(card);
+  }
+}
+// Requests appear while /api/agent/run is still waiting for a human decision.
+refreshApprovals().catch(() => {});
+setInterval(() => refreshApprovals().catch(() => {}), 1500);

@@ -6,6 +6,7 @@ import { AuditStore } from './audit.mjs';
 import { POLICIES } from './policy.mjs';
 import { runDemo } from './demo.mjs';
 import { createOllamaClient, runAgent } from './agent.mjs';
+import { ApprovalQueue } from './approvals.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publicFiles = {
@@ -26,6 +27,7 @@ function sendJson(res, status, data) {
 export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.jsonl'), workspaceRoot = join(root, 'demo-workspace'), agentClient = createOllamaClient() } = {}) {
   mkdirSync(workspaceRoot, { recursive: true });
   const store = new AuditStore(dataFile);
+  const approvalQueue = new ApprovalQueue();
   let lastDemoStart = 0;
   let activeDemo = false;
   let activeAgent = false;
@@ -44,12 +46,33 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     const host = req.headers.host ?? '';
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) return sendJson(res, 403, { error: 'Local host required.' });
     const url = new URL(req.url ?? '/', `http://${host}`);
-    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.2.0', mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.3.0', mode: 'local-only' });
     if (req.method === 'GET' && url.pathname === '/api/events') {
       return sendJson(res, 200, { events: store.list({ limit: url.searchParams.get('limit') ?? 300, decision: url.searchParams.get('decision'), runId: url.searchParams.get('runId') }) });
     }
     if (req.method === 'GET' && url.pathname === '/api/stats') return sendJson(res, 200, store.stats());
     if (req.method === 'GET' && url.pathname === '/api/policies') return sendJson(res, 200, { policies: POLICIES });
+    if (req.method === 'GET' && url.pathname === '/api/approvals') {
+      return sendJson(res, 200, { pending: approvalQueue.list() });
+    }
+    const decisionMatch = /^\/api\/approvals\/([0-9a-f-]{36})\/decision$/i.exec(url.pathname);
+    if (req.method === 'POST' && decisionMatch) {
+      if (req.headers.origin !== `http://${host}` || !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+        return sendJson(res, 403, { error: 'Same-origin JSON request required.' });
+      }
+      let raw = '';
+      try {
+        for await (const chunk of req) {
+          raw += chunk.toString('utf8');
+          if (Buffer.byteLength(raw) > 256) return sendJson(res, 413, { error: 'Request is too large.' });
+        }
+      } catch { return sendJson(res, 400, { error: 'Could not read approval request.' }); }
+      let body;
+      try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'Invalid JSON.' }); }
+      if (body?.decision !== 'approve' && body?.decision !== 'deny') return sendJson(res, 400, { error: 'Decision must be approve or deny.' });
+      if (!approvalQueue.finish(decisionMatch[1], body.decision === 'approve')) return sendJson(res, 409, { error: 'Approval is no longer pending.' });
+      return sendJson(res, 200, { resolved: true });
+    }
     if (req.method === 'GET' && url.pathname === '/api/agent/status') {
       const status = await agentClient.status();
       return sendJson(res, 200, status);
@@ -92,7 +115,7 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
       lastAgentStart = Date.now();
       activeAgent = true;
       try {
-        const result = await runAgent({ prompt: body.prompt, store, workspaceRoot, chat: args => agentClient.chat(args), model: agentClient.model });
+        const result = await runAgent({ prompt: body.prompt, store, workspaceRoot, chat: args => agentClient.chat(args), model: agentClient.model, approvalQueue });
         return sendJson(res, 200, result);
       } catch (error) {
         const unavailable = /Cannot reach Ollama|model .* unavailable|Ollama timed out/i.test(error.message);
@@ -138,18 +161,19 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
   });
   const originalClose = server.close.bind(server);
   server.close = callback => {
+    approvalQueue.close();
     for (const stream of streams) stream.end();
     streams.clear();
     store.off('event', onEvent);
     return originalClose(callback);
   };
-  return { server, store };
+  return { server, store, approvalQueue };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { server } = createBlackBoxServer();
   const port = Number(process.env.PORT ?? '4317');
   server.listen(port, '127.0.0.1', () => {
-    console.log(`\n  AGENT BLACK BOX  v0.2\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
+    console.log(`\n  AGENT BLACK BOX  v0.3\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
   });
 }

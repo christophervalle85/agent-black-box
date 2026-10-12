@@ -18,3 +18,21 @@
 .agent-run-event{width:100%;display:flex;align-items:center;gap:12px;text-align:left;padding:11px;border:1px solid #273951;border-radius:8px;background:#172236;color:#adbfda;font-size:11px}.agent-run-event .mono{color:#e3edfd}.agent-run-event:hover{background:#21304a}
 .notice a{color:#98b4ff}.notice code{color:#d9e6fd}
 @media(max-width:1100px){.agent-grid{grid-template-columns:1fr}}@media(max-width:680px){.agent-inner{padding:16px}.agent-run-event{flex-wrap:wrap}}
+
+/* v0.3: explicit, single-use operator authorization */
+.status.review{color:#fbd38b;background:#503d20}
+.event-icon.review{background:#413622;color:#ffcf83}
+.agent-approval-section{margin-top:20px}
+.approval-list{padding:12px 24px 24px;display:grid;gap:14px}
+.approval-card{padding:20px;border:1px solid #465573;background:#192639;border-radius:10px}
+.approval-kicker{color:#f2bd77;letter-spacing:.6px;font-size:10px;font-weight:750;margin-bottom:9px;overflow-wrap:anywhere}
+.approval-card h3{font-size:16px;margin:0 0 12px;overflow-wrap:anywhere}
+.approval-caption{font-size:11px;color:#a2b1c7}
+.approval-content{background:#0f1725;border:1px solid #34445a;border-radius:8px;color:#dbe7f8;white-space:pre-wrap;overflow-wrap:anywhere;max-height:250px;overflow:auto;padding:14px;font-size:12px;line-height:1.6}
+.approval-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin-top:15px}
+.approval-action{border:1px solid #425572;border-radius:6px;padding:11px 15px;font-size:11px;font-weight:700;color:#e8effc;background:#27354b}
+.approval-action.approve{background:#215343;color:#c9ffe6;border-color:#38876d}
+.approval-action.deny{background:#4a2730;color:#ffd6dc;border-color:#824554}
+.approval-action:disabled{opacity:.55;cursor:wait}
+.approval-empty{color:#94a7c0;font-size:12px;padding:26px 4px}
+@media(max-width:680px){.approval-list{padding:10px 15px 20px}.approval-actions{justify-content:stretch}.approval-action{flex:1}}

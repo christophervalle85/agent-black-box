@@ -44,6 +44,6 @@ test('only allowlisted HTTPS GET mock destination is allowed', () => fixture(wor
 }));
 test('shell and unregistered tools are blocked', () => fixture(workspace => {
   assert.equal(check('shell.exec', { command: 'echo hello' }, workspace).ruleId, 'DENY_SHELL');
-  assert.equal(check('file.write', { path: 'safe.txt' }, workspace).ruleId, 'DENY_UNKNOWN_TOOL');
+  assert.equal(check('unregistered.tool', { path: 'safe.txt' }, workspace).ruleId, 'DENY_UNKNOWN_TOOL');
   assert.equal(check('file.read', null, workspace).decision, 'block');
 }));
