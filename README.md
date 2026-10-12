@@ -1,8 +1,8 @@
-# Agent Black Box · v0.3
+# Agent Black Box · v0.4
 
-**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 adds an explicit, time-limited human approval queue for creating new demo notes.
+**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 adds a real local MCP stdio gateway**, forwarding permitted calls to a separate downstream MCP notes server.
 
-![Status](https://img.shields.io/badge/MVP-v0.3-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
+![Status](https://img.shields.io/badge/MVP-v0.4-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
 ## Quick start
 
@@ -30,13 +30,27 @@ A tool-capable model normally turns this into one or more calls; model behavior 
 
 ```bash
 npm run agent -- 'Read notes.txt and summarize it.'
-npm test                         # 25 unit and HTTP integration tests, no Ollama needed
+npm test                         # protocol, guard and HTTP tests; no Ollama needed
 node examples/instrument-tool.mjs
 PORT=4400 npm start
 OLLAMA_MODEL=qwen3:8b npm start # pull that model first
 ```
 
 No cloud API key or npm dependency installation is required. The model download is a few gigabytes and needs sufficient memory. Data persists to the gitignored `data/audit.jsonl` file; Ctrl+C stops the server.
+
+## v0.4: Real MCP stdio gateway
+
+This is a **bounded MCP gateway**, not generic third-party server interception or full modern-MCP compatibility. It implements the 2025-11-25 legacy stdio handshake and only permits `read_note` and approval-gated `write_note` to the bundled downstream MCP server. Unknown tools and unsupported protocol operations fail closed. Read [the MCP operator/security guide](docs/MCP_GATEWAY.md) before connecting any MCP client.
+
+```bash
+npm start             # keep this running: controller and approval UI
+npm run mcp:smoke     # new terminal: live stdio MCP read and policy denial
+npm run mcp:approval  # new terminal: create a new note with one-time human approval
+```
+
+To use another stdio MCP host, configure the `node src/mcp-gateway.mjs` command using an absolute path as explained in the guide. The original Ollama dashboard agent still uses its existing built-in guarded adapters; MCP hosts connect to the **separate gateway process**. MCP events appear in the shared Activity log, refreshed periodically.
+
+**Important:** The official TypeScript MCP SDK v2 supports the new 2026-07-28 protocol. Our deliberately narrow v0.4 wire gateway supports only legacy 2025-11-25 and is tested with a bundled client/server pair. Broad host and server support, official-SDK migration, and stronger OS isolation are future work—not completed features.
 
 ## Architecture
 
@@ -154,3 +168,7 @@ See [docs/SECURITY.md](docs/SECURITY.md). This is an **educational prototype**, 
 ## License
 
 MIT.
+
+## MCP research and compatibility
+
+See [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md) for the tested protocol subset, acceptance commands, tool-level permissions, source references, deployment limitations and future SDK v2 interoperability work.

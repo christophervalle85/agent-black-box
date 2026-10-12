@@ -4,7 +4,7 @@ This is an **educational local-only MVP**, not a hardened security product.
 
 ## Enforcement boundary
 
-`guardedToolCall` evaluates each request before it invokes the supplied `execute` callback. It protects **only callbacks routed through this function** and assumes that trusted adapters actually perform the operation described by the tool name. An untrusted or miswired adapter could violate policy even when metadata is approved. It does not monitor arbitrary Claude/Codex/MCP traffic, intercept host processes, sandbox models, or stop agents from bypassing the wrapper. The demo can perform a read of a harmless file in `demo-workspace`; its HTTP tool is **entirely simulated** and its shell tool is **always denied**. v0.3 can create a new top-level `.txt` file with exclusive creation **only after a single-use human authorization**.
+`guardedToolCall` evaluates each request before it invokes the supplied `execute` callback. It protects **only callbacks routed through this function** and assumes that trusted adapters actually perform the operation described by the tool name. An untrusted or miswired adapter could violate policy even when metadata is approved. v0.4 additionally monitors tool traffic **explicitly routed through the bundled local MCP stdio gateway**; it does not intercept other MCP connections, sandbox host processes, or stop agents from bypassing the gateway. The demo can perform a read of a harmless file in `demo-workspace`; its HTTP tool is **entirely simulated** and its shell tool is **always denied**. v0.3 can create a new top-level `.txt` file with exclusive creation **only after a single-use human authorization**.
 
 ## Audit logging
 
@@ -26,10 +26,14 @@ The server listens on loopback only, validates Host, requires a same-origin JSON
 
 Reads are confined to a workspace using canonical path checks before execution, including symlink boundary checks. A write-capable adversary racing filesystem changes could undermine simple path checks. Real production containment needs an OS sandbox, file descriptor based confinement, privileges dropped, mount isolation, and resource limits.
 
+## MCP v0.4 security boundary
+
+The supported MCP gateway is narrow: it permits two allowlisted tools on a single bundled local downstream subprocess, validates all forwarded calls through the existing guard, reuses the local time-limited approval queue for note writes, and records the lifecycle in the JSONL log. Unsupported methods, tools, malformed frames, unavailable approvals, and out-of-bound data fail closed. The gateway-to-dashboard bearer token is local and mode-0600, but **not protection from processes with the same operating-system identity**. The manual JSON-RPC subset is **not complete MCP 2026 interoperability**; see [MCP_GATEWAY.md](MCP_GATEWAY.md).
+
 ## Next steps toward production readiness
 
 1. Introduce a single enforced tool dispatcher for a supported framework (e.g. OpenAI Agents SDK), including unique run IDs, schemas, and centrally enforced human approval.
-2. For MCP tools, build a proper mediating client/proxy that handles protocol negotiation, full message semantics, authorization and backward compatibility. Do not claim production MCP support until tested.
+2. Upgrade the narrow MCP 2025 stdio adapter to the official MCP TypeScript SDK v2 for broad 2026-era negotiation, capability handling, full message semantics, interoperability tests and remote server support; do not claim production MCP support until then.
 3. Add schema validation, per-tool configurable policies, encrypted/tamper-evident storage, robust identity and authentication, rate limiting, durable ingestion, redaction filters, and observability telemetry.
 4. Add a process sandbox for commands and network restrictions at OS/proxy level, not just application policy.
 
