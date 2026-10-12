@@ -186,6 +186,8 @@ test('modern stdio: server/discover, per-request metadata and complete tool resu
   assert.equal(discover.result._meta['io.modelcontextprotocol/serverInfo'].name,'agent-black-box-gateway');
   const list=await client.request('tools/list',modern()).p;
   assert.equal(list.result.resultType,'complete');
+  assert.equal(list.result.ttlMs,0);
+  assert.equal(list.result.cacheScope,'private');
   assert.deepEqual(list.result.tools.map(x=>x.name),['read_note','write_note']);
   const read=await client.request('tools/call',modern({name:'read_note',arguments:{path:'notes.txt'}})).p;
   assert.equal(read.result.resultType,'complete');

@@ -30,7 +30,7 @@ const fail = (id,code,message,data) => ({jsonrpc:'2.0',id,error:{code,message,..
 const toolFailure = message => ({content:[{type:'text',text:message}],isError:true});
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const versionMeta = params => object(params?._meta) ? params._meta['io.modelcontextprotocol/protocolVersion'] : undefined;
-const stamp = result => ({...result,_meta:{...(object(result._meta)?result._meta:{}),'io.modelcontextprotocol/serverInfo':IDENTITY},resultType:'complete'});
+const stamp = result => ({...result,ttlMs:result.ttlMs??0,cacheScope:result.cacheScope??'private',_meta:{...(object(result._meta)?result._meta:{}),'io.modelcontextprotocol/serverInfo':IDENTITY},resultType:'complete'});
 
 function validArgs(name,args) {
   if (!object(args) || Object.keys(args).some(key => !['path','content'].includes(key))) return false;
