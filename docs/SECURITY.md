@@ -46,3 +46,8 @@ The agent loop permits at most 6 model rounds and 12 requested tool calls; malfo
 Prompts and file contents might contain prompt injection; the system prompt tells the model to ignore instructions from files, but that text is not a sufficient defense by itself. Safety is enforced by the tool dispatcher and its trusted adapters. Logs deliberately omit file contents and model answers, but pattern-based data redaction is not comprehensive, and file contents are returned to the local model for reasoning. Use only benign demo data.
 
 The UI is designed for a single trusted local operator. It is not authenticated, so never publish the port, embed the dashboard in other sites, or expose it via a reverse proxy. The Ollama endpoint should likewise remain local. Browser requests to start the agent require a matching `Origin` and JSON content type; network threats and local malware are not fully addressed by these checks.
+
+
+## v0.5 MCP compatibility/hardening limits
+
+The gateway now serves the documented 2026-07-28 modern MCP tool subset as well as the 2025-11-25 legacy subset; unknown protocol revisions and missing modern metadata are rejected. Downstream initialization now follows the legacy notification order. A cancelled forwarded request terminates the downstream process, but an earlier side effect remains possible and must be considered **outcome uncertain**. Do not interpret cancellation as atomic rollback. The downstream is still an unsandboxed executable with the invoking user's OS privileges, and the audit file is not tamper-evident. This remains a local educational prototype, not a multi-user production security gateway.
