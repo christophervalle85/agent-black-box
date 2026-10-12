@@ -1,0 +1,173 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createBlackBoxServer } from '../src/server.mjs';
+import { readJsonLines, sendJsonLine, McpPeer } from '../src/mcp-wire.mjs';
+
+const project = resolve(import.meta.dirname,'..');
+const gateway = join(project,'src/mcp-gateway.mjs');
+
+async function fixture(fn,{dashboard=true}={}) {
+  const root=mkdtempSync(join(tmpdir(),'bb-mcp-'));
+  const workspaceRoot=join(root,'workspace');mkdirSync(workspaceRoot);
+  writeFileSync(join(workspaceRoot,'notes.txt'),'MCP integration test content');
+  const dataFile=join(root,'data','audit.jsonl');
+  const controller=createBlackBoxServer({dataFile,workspaceRoot,agentClient:{status:async()=>({reachable:false})}});
+  if(dashboard){controller.server.listen(0,'127.0.0.1'); await once(controller.server,'listening');}
+  const port=dashboard?controller.server.address().port:1;
+  const child=spawn(process.execPath,[gateway],{
+    cwd:project,env:{...process.env,MCP_WORKSPACE_ROOT:workspaceRoot,MCP_AUDIT_FILE:dataFile,MCP_TOKEN_FILE:controller.tokenFile,MCP_CONTROLLER_PORT:String(port)},
+    stdio:['pipe','pipe','pipe']
+  });
+  let next=1;
+  const pending=new Map();const notifications=[];
+  const unlisten=readJsonLines(child.stdout,{onMessage:msg=>{
+    if(Object.hasOwn(msg,'id')){const p=pending.get(msg.id);if(p){pending.delete(msg.id);p.resolve(msg);}}
+    else notifications.push(msg);
+  },onError:e=>{for(const p of pending.values())p.reject(e);pending.clear();}});
+  const client={
+    raw(msg){sendJsonLine(child.stdin,msg);},
+    request(method,params={}){
+      const id=next++;
+      let timer;
+      const p=new Promise((resolve,reject)=>{
+        pending.set(id,{resolve:x=>{clearTimeout(timer);resolve(x);},reject});
+        timer=setTimeout(()=>{pending.delete(id);reject(Error('Timed out waiting for gateway'));},5500);
+        sendJsonLine(child.stdin,{jsonrpc:'2.0',id,method,params});
+      });
+      return {id,p};
+    },
+    async initialize(){
+      const init=await this.request('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1.0'}}).p;
+      assert.equal(init.result?.protocolVersion,'2025-11-25');
+      this.raw({jsonrpc:'2.0',method:'notifications/initialized'});
+      return init;
+    }
+  };
+  try {await fn({root,workspaceRoot,dataFile,controller,client,child,port});}
+  finally{
+    child.stdin.end();child.kill('SIGTERM');await Promise.race([once(child,'exit').catch(()=>{}),new Promise(r=>setTimeout(r,1800))]);
+    unlisten();
+    if(dashboard)await new Promise(r=>controller.server.close(r));
+    else controller.approvalQueue.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+}
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function waitForApproval(controller){
+  for(let i=0;i<100;i++){const p=controller.approvalQueue.list()[0];if(p)return p;await sleep(20)}
+  throw Error('Approval did not arrive');
+}
+
+test('MCP stdio initialization gates requests, advertises only approved tools, and forwards real read',()=>fixture(async({client,controller,dataFile})=>{
+  const early=await client.request('tools/list').p;
+  assert.equal(early.error?.code,-32002);
+  const init=await client.initialize();
+  assert.deepEqual(init.result.capabilities,{tools:{}});
+  const list=await client.request('tools/list').p;
+  assert.deepEqual(list.result.tools.map(x=>x.name),['read_note','write_note']);
+  const read=await client.request('tools/call',{name:'read_note',arguments:{path:'notes.txt'}}).p;
+  assert.match(read.result.content[0].text,/MCP integration test/);
+  const secret=await client.request('tools/call',{name:'read_note',arguments:{path:'.env'}}).p;
+  assert.equal(secret.result.isError,true);
+  assert.match(secret.result.content[0].text,/DENY_SENSITIVE_FILE/);
+  const unknown=await client.request('tools/call',{name:'shell_command',arguments:{command:'pwd'}}).p;
+  assert.equal(unknown.result.isError,true);
+  assert.equal((await client.request('resources/list').p).error.code,-32601);
+  const events=readFileSync(dataFile,'utf8');
+  assert.match(events,/mcp-stdio/);
+  assert.doesNotMatch(events,/MCP integration test content/);
+  assert.equal(controller.store.stats().total,3);
+}));
+
+test('real downstream note creation waits for dashboard approval; denied and duplicate writes do not execute',()=>fixture(async({client,controller,workspaceRoot,dataFile})=>{
+  await client.initialize();
+  const first=client.request('tools/call',{name:'write_note',arguments:{path:'approved.txt',content:'approved content'}});
+  const pending=await waitForApproval(controller);
+  assert.equal(pending.filename,'approved.txt');
+  assert.equal(pending.content,'approved content');
+  assert.equal(existsSync(join(workspaceRoot,'approved.txt')),false);
+  const browser=await fetch(`http://127.0.0.1:${controller.server.address().port}/api/approvals/${pending.id}/decision`,{
+    method:'POST',headers:{origin:`http://127.0.0.1:${controller.server.address().port}`,'content-type':'application/json'},
+    body:JSON.stringify({decision:'approve'})
+  });
+  assert.equal(browser.status,200);
+  const result=await first.p;
+  assert.equal(result.result.isError,undefined);
+  assert.equal(readFileSync(join(workspaceRoot,'approved.txt'),'utf8'),'approved content');
+  const second=client.request('tools/call',{name:'write_note',arguments:{path:'denied.txt',content:'never here'}});
+  const denied=await waitForApproval(controller);
+  controller.approvalQueue.finish(denied.id,false);
+  const blocked=await second.p;
+  assert.equal(blocked.result.isError,true);
+  assert.equal(existsSync(join(workspaceRoot,'denied.txt')),false);
+  const overwrite=client.request('tools/call',{name:'write_note',arguments:{path:'approved.txt',content:'overwrite'}});
+  const overlap=await waitForApproval(controller);
+  controller.approvalQueue.finish(overlap.id,true);
+  const noOverwrite=await overwrite.p;
+  assert.equal(noOverwrite.result.isError,true);
+  assert.equal(readFileSync(join(workspaceRoot,'approved.txt'),'utf8'),'approved content');
+  const grouped=controller.store.activity();
+  assert.equal(grouped.length,3);
+  assert.equal(grouped.filter(x=>x.decision==='block').length,1);
+  assert.equal(grouped.filter(x=>x.outcome==='error').length,1);
+  assert.ok(grouped.some(x=>x.events.length===2&&x.ruleId==='APPROVAL_GRANTED'));
+  assert.match(readFileSync(dataFile,'utf8'),/APPROVAL_DENIED/);
+}));
+
+test('MCP gate fails closed if approval controller is offline',()=>fixture(async({client,workspaceRoot})=>{
+  await client.initialize();
+  const answer=await client.request('tools/call',{name:'write_note',arguments:{path:'offline.txt',content:'no'}}).p;
+  assert.equal(answer.result.isError,true);
+  assert.equal(existsSync(join(workspaceRoot,'offline.txt')),false);
+},{dashboard:false}));
+
+test('MCP cancellation before approval prevents a later write',()=>fixture(async({client,workspaceRoot,controller})=>{
+  await client.initialize();
+  const call=client.request('tools/call',{name:'write_note',arguments:{path:'cancel.txt',content:'no'}});
+  // A cancelled MCP request intentionally receives no response; consume the tester timeout.
+  call.p.catch(() => {});
+  const p=await waitForApproval(controller);
+  client.raw({jsonrpc:'2.0',method:'notifications/cancelled',params:{requestId:call.id}});
+  for(let i=0;i<50&&controller.approvalQueue.list().length;i++)await sleep(20);
+  assert.equal(controller.approvalQueue.list().length,0);
+  assert.equal(controller.approvalQueue.finish(p.id,true),false);
+  await sleep(80);
+  assert.equal(existsSync(join(workspaceRoot,'cancel.txt')),false);
+}));
+
+test('MCP approval endpoint rejects missing bearer and browser origins',()=>fixture(async({port,controller})=>{
+  const address=`http://127.0.0.1:${port}/api/mcp/approval`;
+  const unauth=await fetch(address,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+  assert.equal(unauth.status,403);
+  const token=readFileSync(controller.tokenFile,'utf8').trim();
+  const forged=await fetch(address,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${token}`,origin:`http://127.0.0.1:${port}`},body:'{}'});
+  assert.equal(forged.status,403);
+  assert.equal(controller.approvalQueue.list().length,0);
+}));
+
+
+test('MCP blocks traversal, unsafe writes, unregistered tools, and duplicate active IDs',()=>fixture(async({client,controller,workspaceRoot})=>{
+  await client.initialize();
+  const traversal=await client.request('tools/call',{name:'read_note',arguments:{path:'../secrets.txt'}}).p;
+  assert.equal(traversal.result.isError,true);
+  const invalid=await client.request('tools/call',{name:'write_note',arguments:{path:'../evil.txt',content:'unsafe'}}).p;
+  assert.equal(invalid.result.isError,true);
+  const mutation=await client.request('tools/call',{name:'shell_command',arguments:{command:'echo hello'}}).p;
+  assert.equal(mutation.result.isError,true);
+  const pending=client.request('tools/call',{name:'write_note',arguments:{path:'pending.txt',content:'awaiting review'}});
+  pending.p.catch(()=>{});
+  const approval=await waitForApproval(controller);
+  client.raw({jsonrpc:'2.0',id:pending.id,method:'tools/call',params:{name:'read_note',arguments:{path:'notes.txt'}}});
+  // The original pending call will receive the duplicate-ID error in this test harness.
+  const duplicate=await pending.p;
+  assert.equal(duplicate.error?.code,-32600);
+  controller.approvalQueue.finish(approval.id,false);
+  await sleep(60);
+  assert.equal(existsSync(join(workspaceRoot,'pending.txt')),false);
+}));

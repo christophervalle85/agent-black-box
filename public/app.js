@@ -277,3 +277,6 @@ function renderApprovals(parent) {
 // Requests appear while /api/agent/run is still waiting for a human decision.
 refreshApprovals().catch(() => {});
 setInterval(() => refreshApprovals().catch(() => {}), 1500);
+// External MCP gateways append audit events in a separate process. SSE is
+// in-process only, so poll the read-only projection for these events as well.
+setInterval(() => refresh().catch(() => {}), 3000);

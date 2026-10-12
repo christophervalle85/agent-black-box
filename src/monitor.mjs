@@ -30,7 +30,7 @@ export function describeInput(tool, args) {
  * Pre-execution guard for in-process tools. A callback is invoked only on ALLOW.
  * This cannot intercept calls that bypass the wrapper.
  */
-export async function guardedToolCall({ agentId, runId, tool, args, execute, store, workspaceRoot, source = 'integration', requestApproval }) {
+export async function guardedToolCall({ agentId, runId, tool, args, execute, store, workspaceRoot, source = 'integration', requestApproval, signal, recordStart = false }) {
   if (typeof execute !== 'function') throw new TypeError('An execution callback is required.');
   const policy = evaluatePolicy(tool, args, workspaceRoot);
   // A human approves these exact primitive values, not mutable model objects.
@@ -49,6 +49,15 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
     durationMs: 0
   };
 
+  if (policy.decision === 'allow' && recordStart) {
+    event.approvalId = event.id; // stable request identity for lifecycle projection
+    event.outcome = 'pending';
+    event.summary = 'Policy allowed; downstream execution not complete.';
+    store.add({ ...event }); // fail closed if audit is unavailable
+    event.id = randomUUID();
+    event.timestamp = new Date().toISOString();
+  }
+
   if (policy.decision === 'review') {
     // A review record is persisted before the operator can authorize execution.
     event.approvalId = event.id;
@@ -62,7 +71,7 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
     }
     event.id = randomUUID();
     event.timestamp = new Date().toISOString();
-    event.decision = response?.approved === true ? 'allow' : 'block';
+    event.decision = response?.approved === true && !signal?.aborted ? 'allow' : 'block';
     event.ruleId = response?.approved === true ? 'APPROVAL_GRANTED' : 'APPROVAL_DENIED';
     event.reason = response?.approved === true ? 'The local operator approved this exact note creation.' : 'Human approval was not granted.';
     event.outcome = response?.approved === true ? 'success' : 'blocked';
@@ -75,6 +84,13 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
   }
   if (policy.decision === 'block') {
     event.durationMs = Math.round((performance.now() - start) * 10) / 10;
+    store.add(event);
+    return { event, result: null };
+  }
+
+  if (signal?.aborted) {
+    event.decision = 'block'; event.outcome = 'blocked'; event.ruleId = 'MCP_CANCELLED';
+    event.summary = 'Client cancelled before downstream execution.';
     store.add(event);
     return { event, result: null };
   }

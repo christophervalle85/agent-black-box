@@ -1,5 +1,7 @@
 import { createServer as createHttpServer } from 'node:http';
-import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { evaluatePolicy } from './policy.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AuditStore } from './audit.mjs';
@@ -28,6 +30,12 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
   mkdirSync(workspaceRoot, { recursive: true });
   const store = new AuditStore(dataFile);
   const approvalQueue = new ApprovalQueue();
+  // Ephemeral controller credential, file mode 0600. Rotate with every server start.
+  // Not protection against hostile programs already running as the same OS user.
+  const tokenFile = join(dirname(dataFile), 'mcp-controller-token');
+  const controllerToken = randomBytes(32).toString('hex');
+  writeFileSync(tokenFile, controllerToken, { mode: 0o600 });
+  chmodSync(tokenFile, 0o600);
   let lastDemoStart = 0;
   let activeDemo = false;
   let activeAgent = false;
@@ -46,7 +54,7 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     const host = req.headers.host ?? '';
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) return sendJson(res, 403, { error: 'Local host required.' });
     const url = new URL(req.url ?? '/', `http://${host}`);
-    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.3.0', mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.4.0', mode: 'local-only' });
     if (req.method === 'GET' && url.pathname === '/api/events') {
       return sendJson(res, 200, { events: store.list({ limit: url.searchParams.get('limit') ?? 300, decision: url.searchParams.get('decision'), runId: url.searchParams.get('runId') }) });
     }
@@ -76,6 +84,46 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
       if (!approvalQueue.finish(decisionMatch[1], body.decision === 'approve')) return sendJson(res, 409, { error: 'Approval is no longer pending.' });
       return sendJson(res, 200, { resolved: true });
     }
+    if (req.method === 'POST' && url.pathname === '/api/mcp/approval') {
+      // Only the trusted local MCP gateway may place requests in the approval queue.
+      const credential = req.headers.authorization;
+      const candidate = typeof credential === 'string' && credential.startsWith('Bearer ') ? credential.slice(7) : '';
+      const valid = candidate.length === controllerToken.length &&
+        timingSafeEqual(Buffer.from(candidate), Buffer.from(controllerToken));
+      if (!valid || req.headers.origin !== undefined ||
+          !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+        return sendJson(res, 403, { error: 'Authorized local MCP gateway required.' });
+      }
+      let raw = '';
+      try {
+        for await (const chunk of req) {
+          raw += chunk.toString('utf8');
+          if (Buffer.byteLength(raw) > 4096) return sendJson(res, 413, { error: 'Request too large.' });
+        }
+      } catch { return sendJson(res, 400, { error: 'Invalid request body.' }); }
+      let body;
+      try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'Invalid JSON.' }); }
+      const uuid = /^[0-9a-f-]{36}$/i;
+      if (!body || !uuid.test(body.id) || typeof body.runId !== 'string' || body.runId.length > 100 ||
+          typeof body.agentId !== 'string' || body.agentId.length > 100 || body.tool !== 'file.write' ||
+          evaluatePolicy(body.tool, body.args, workspaceRoot).decision !== 'review') {
+        return sendJson(res, 400, { error: 'Request not eligible for approval.' });
+      }
+      if (approvalQueue.pending.size >= 8) return sendJson(res, 429, { error: 'Approval queue full.' });
+      // If the MCP caller disappears, cancel the pending request. Never leave a
+      // disconnected approval that could later unlock a write.
+      let settled = false;
+      const onClose = () => { if (!settled) approvalQueue.finish(body.id, false, 'Gateway disconnected.'); };
+      res.on('close', onClose);
+      try {
+        const result = await approvalQueue.wait({ ...body, input: `MCP note: ${body.args.path} (content not logged)` });
+        settled = true;
+        if (!res.destroyed) sendJson(res, 200, result);
+      } catch { if (!res.destroyed) sendJson(res, 503, { error: 'Approval unavailable.' }); }
+      finally { settled = true; res.off('close', onClose); }
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/agent/status') {
       const status = await agentClient.status();
       return sendJson(res, 200, status);
@@ -170,13 +218,13 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     store.off('event', onEvent);
     return originalClose(callback);
   };
-  return { server, store, approvalQueue };
+  return { server, store, approvalQueue, tokenFile };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { server } = createBlackBoxServer();
   const port = Number(process.env.PORT ?? '4317');
   server.listen(port, '127.0.0.1', () => {
-    console.log(`\n  AGENT BLACK BOX  v0.3\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
+    console.log(`\n  AGENT BLACK BOX  v0.4\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
   });
 }
