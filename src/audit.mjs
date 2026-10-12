@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
+import { groupAuditEvents, filterActivity } from './activity.mjs';
 
 export class AuditStore extends EventEmitter {
   constructor(filename) {
@@ -31,17 +32,30 @@ export class AuditStore extends EventEmitter {
     return events;
   }
 
+  activity({ limit = 300, decision, runId } = {}) {
+    // Group BEFORE limiting or filtering so the final decision isn't detached
+    // from the pending event. Raw events remain available at /api/events.
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 300, 1000));
+    const groups = groupAuditEvents(this.list({ limit: 1000, runId }));
+    return filterActivity(groups, decision).slice(0, safeLimit);
+  }
+
   stats() {
+    // The window is explicitly bounded; totals are for requests represented by
+    // the latest 1,000 audit events, not lifetime totals.
     const events = this.list({ limit: 1000 });
-    const count = key => events.filter(e => e.decision === key).length;
+    const activity = groupAuditEvents(events);
+    const count = decision => activity.filter(item => item.decision === decision).length;
     return {
-      total: events.length,
+      total: activity.length,
+      auditEvents: events.length,
       allowed: count('allow'),
       blocked: count('block'),
-      errors: events.filter(e => e.outcome === 'error').length,
-      highRisk: events.filter(e => e.risk === 'high' || e.risk === 'critical').length,
-      runs: new Set(events.map(e => e.runId)).size,
-      window: 'Latest 1,000 audit events'
+      pending: count('review'),
+      errors: activity.filter(item => item.outcome === 'error').length,
+      highRisk: activity.filter(item => item.risk === 'high' || item.risk === 'critical').length,
+      runs: new Set(activity.map(item => item.runId)).size,
+      window: 'Tool requests represented in latest 1,000 audit events'
     };
   }
 }

@@ -1,8 +1,8 @@
-# Agent Black Box · v0.2
+# Agent Black Box · v0.3
 
-**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard.
+**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 adds an explicit, time-limited human approval queue for creating new demo notes.
 
-![Status](https://img.shields.io/badge/MVP-v0.2-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
+![Status](https://img.shields.io/badge/MVP-v0.3-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
 ## Quick start
 
@@ -30,7 +30,7 @@ A tool-capable model normally turns this into one or more calls; model behavior 
 
 ```bash
 npm run agent -- 'Read notes.txt and summarize it.'
-npm test                         # 19 unit and HTTP integration tests, no Ollama needed
+npm test                         # 25 unit and HTTP integration tests, no Ollama needed
 node examples/instrument-tool.mjs
 PORT=4400 npm start
 OLLAMA_MODEL=qwen3:8b npm start # pull that model first
@@ -66,13 +66,25 @@ UI task prompt                   Scripted demo
                      +------ tool result ----------> Next Ollama turn
 ```
 
-The **only real side effect** from the agent tool adapters is reading eligible local files in `demo-workspace/`. Documentation fetches return a stubbed response; arbitrary shell commands are always blocked. No generated code is executed. The server and Ollama requests use loopback (`localhost`).
+The agent can read eligible local files and, **only after one-time human approval**, create new top-level `.txt` notes in `demo-workspace/`. Existing files cannot be overwritten. Documentation fetches return a stubbed response; arbitrary shell commands are always blocked. No generated code is executed. The server and Ollama requests use loopback (`localhost`).
+
+## Human approvals (v0.3)
+
+1. Start the app and open **AI agent**. Click **Approval test**, then **Run with local LLM**.
+2. If the model chooses `write_note`, the API request pauses while **Approvals** and the inline approval panel display the exact filename and full content. The dashboard remains usable during this wait.
+3. Click **Approve once** or **Deny request**. **Approve once** permits only this already-pending operation, not future writes. A pending request expires automatically after **90 seconds**; expiration and denial never execute the write.
+4. After approval, verify the new note under `demo-workspace/` and inspect `REQUIRE_NOTE_APPROVAL` / `APPROVAL_GRANTED` audit events. Denial records `APPROVAL_DENIED` and leaves no file.
+
+**Enforcement rules:** only *new*, top-level filenames matching `^[a-z0-9][a-z0-9_-]{0,39}\.txt$` (case-insensitive), with 1–2,000 UTF-8 bytes of content, are reviewable. Attempts to create `.env`, use paths outside the workspace, overwrite existing files, or run shell commands are **not** made safe by clicking Approve. The filesystem uses exclusive no-follow creation; an already-existing name produces an execution error. Approval requests live only in server memory. Restarting the app cancels them; pending audit records remain in JSONL as historical records. **This is not an OS sandbox or an authenticated approval system.** Only run on loopback with benign demo content.
 
 ## Enforcement policies
 
 | Rule | Behavior |
 | --- | --- |
 | `ALLOW_WORKSPACE_READ` | Read ordinary, in-workspace files |
+| `REQUIRE_NOTE_APPROVAL` | Pause note creation until one-time human approval |
+| `DENY_UNSAFE_WRITE` | Reject unsafe filenames or content outside the bounded note schema |
+| `APPROVAL_GRANTED` / `APPROVAL_DENIED` | Final audit outcomes of reviewable note requests |
 | `DENY_PATH_ESCAPE` | Reject traversal, absolute paths and escaping symlinks |
 | `DENY_SENSITIVE_FILE` | Reject typical credential and private key filenames |
 | `ALLOW_MOCK_DOCS` | Permit **simulated** GETs to `docs.example.test` (no network) |
@@ -80,6 +92,10 @@ The **only real side effect** from the agent tool adapters is reading eligible l
 | `DENY_SHELL` | Block *every* shell execution request |
 | `DENY_UNKNOWN_TOOL` | Reject unregistered tools |
 | `INVALID_INPUT` | Reject malformed tool-call arguments |
+
+### Activity and audit history
+
+Approval requests produce **two append-only audit events**: `REQUIRE_NOTE_APPROVAL` followed by `APPROVAL_GRANTED` or `APPROVAL_DENIED`. The Activity log displays **one tool request** with its current decision and a full chronological decision timeline in the details dialog. The original records are never rewritten. `GET /api/events` still returns the raw records; `GET /api/activity` returns grouped tool requests with `events[]`, stable request IDs, and the final outcome. Filter `decision=review` shows **currently pending** requests; `decision=reviewed` shows every request that entered review, including completed approvals and denials. The dashboard totals count unique requests (not audit lifecycle transitions); the statistics API additionally exposes `auditEvents`. All views are scoped to the latest **1,000 underlying audit events**, so boundary-spanning requests can have partial history; this is not a lifetime analytics store. After a crash, an orphaned pending event may still appear until a separate reconciliation feature is added.
 
 The model sees friendly function names (`read_file`, `fetch_docs`, `run_shell`), which are mapped to the existing guarded adapters (`file.read`, `network.fetch`, `shell.exec`). You can inspect the internal tool names and rules in the audit log.
 
@@ -90,10 +106,13 @@ The model sees friendly function names (`read_file`, `fetch_docs`, `run_shell`),
 | `GET /api/health` | Service health and version |
 | `GET /api/agent/status` | Ollama connectivity and configured model availability |
 | `POST /api/agent/run` | Execute one model-driven task and return answer + audit records |
-| `GET /api/events?limit=300&decision=block` | Recent audit events |
-| `GET /api/stats` | Audit statistics |
+| `GET /api/events?limit=300&decision=block` | Original append-only audit events (raw, ungrouped) |
+| `GET /api/activity?limit=300&decision=block` | Tool requests grouped by `approvalId`, with chronological `events` history |
+| `GET /api/stats` | Unique tool-request statistics (`auditEvents` counts underlying records separately) |
 | `GET /api/policies` | Rules presented in the UI |
 | `GET /api/stream` | Live SSE audit stream |
+| `GET /api/approvals` | Pending reviews (including note content) on loopback only |
+| `POST /api/approvals/:id/decision` | One-shot `{"decision":"approve"}` or `{"decision":"deny"}`; same-origin JSON required |
 | `POST /api/demo/run` | Run the original nine scripted scenarios |
 
 The two POST endpoints require same-origin JSON. An agent task body looks like `{"prompt":"Read notes.txt"}`. The REST API intentionally has no public authentication and should not be exposed beyond localhost.
@@ -102,11 +121,13 @@ The two POST endpoints require same-origin JSON. An agent task body looks like `
 
 ```text
 src/agent.mjs          Ollama API, tool declarations and bounded reasoning loop
+src/approvals.mjs      In-memory approval queue, single-use decisions and expiration
 src/server.mjs         Local HTTP API, static assets, SSE
 src/policy.mjs         Deterministic tool approval/denial rules
 src/monitor.mjs        Pre-execution wrapper and redacted audit metadata
-src/tools.mjs          Controlled read-only file and fake documentation adapters
-src/audit.mjs          Append-only JSONL event storage
+src/tools.mjs          Guarded file read/new-note write and fake documentation adapters
+src/audit.mjs          Append-only JSONL event storage and grouped statistics
+src/activity.mjs       Immutable event-to-tool-request lifecycle projection
 src/demo.mjs           Nine scripted regression scenarios
 public/                Browser dashboard and real-agent prompt UI
 examples/run-agent.mjs Run a real model-driven task from the command line
@@ -117,11 +138,11 @@ docs/SECURITY.md       Threat boundaries and hardening gaps
 
 ## Real-model behavior vs automated tests
 
-The repo has test coverage for the message protocol and security guard using *mocked* model outputs; no downloaded LLM is included. Tests verify that blocked tool calls never reach their execution callbacks and that the mocked agent can iteratively consume tool results. **The full inference experience is not validated here against an installed Ollama model.** Run it locally and adjust the selected model if its tool-calling quality is poor.
+The repo has test coverage for the message protocol and approval guard using *mocked* model outputs; no downloaded LLM is included. Tests verify that blocked tool calls never reach their execution callbacks and that the mocked agent can iteratively consume tool results. **The full inference experience is not validated here against an installed Ollama model.** Run it locally and adjust the selected model if its tool-calling quality is poor.
 
 ## What to build next
 
-1. Human approval/denial workflow for sensitive actions (with audit history).
+1. Validate the approval workflow locally against Ollama (mocked integration tests pass, but real model behavior may vary).
 2. Real MCP mediating client/server with per-tool schemas, auth, and permissions.
 3. Stronger security boundaries: hardened filesystem reads, cryptographically verifiable logs, identity, sandboxing and robust sensitive-data handling.
 4. Rich run histories, per-agent timelines and container deployment.
