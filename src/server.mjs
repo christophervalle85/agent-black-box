@@ -1,0 +1,155 @@
+import { createServer as createHttpServer } from 'node:http';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { AuditStore } from './audit.mjs';
+import { POLICIES } from './policy.mjs';
+import { runDemo } from './demo.mjs';
+import { createOllamaClient, runAgent } from './agent.mjs';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const publicFiles = {
+  '/': ['index.html', 'text/html; charset=utf-8'],
+  '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
+  '/styles.css': ['styles.css', 'text/css; charset=utf-8']
+};
+
+function sendJson(res, status, data) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff'
+  });
+  res.end(JSON.stringify(data));
+}
+
+export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.jsonl'), workspaceRoot = join(root, 'demo-workspace'), agentClient = createOllamaClient() } = {}) {
+  mkdirSync(workspaceRoot, { recursive: true });
+  const store = new AuditStore(dataFile);
+  let lastDemoStart = 0;
+  let activeDemo = false;
+  let activeAgent = false;
+  let lastAgentStart = 0;
+  const streams = new Set();
+  const onEvent = event => {
+    const message = `event: audit\ndata: ${JSON.stringify(event)}\n\n`;
+    for (const res of streams) {
+      if (res.writableEnded || res.destroyed) streams.delete(res);
+      else res.write(message);
+    }
+  };
+  store.on('event', onEvent);
+
+  const server = createHttpServer(async (req, res) => {
+    const host = req.headers.host ?? '';
+    if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) return sendJson(res, 403, { error: 'Local host required.' });
+    const url = new URL(req.url ?? '/', `http://${host}`);
+    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.2.0', mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/events') {
+      return sendJson(res, 200, { events: store.list({ limit: url.searchParams.get('limit') ?? 300, decision: url.searchParams.get('decision'), runId: url.searchParams.get('runId') }) });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/stats') return sendJson(res, 200, store.stats());
+    if (req.method === 'GET' && url.pathname === '/api/policies') return sendJson(res, 200, { policies: POLICIES });
+    if (req.method === 'GET' && url.pathname === '/api/agent/status') {
+      const status = await agentClient.status();
+      return sendJson(res, 200, status);
+    }
+
+
+    if (req.method === 'GET' && url.pathname === '/api/stream') {
+      if (streams.size >= 10) return sendJson(res, 429, { error: 'Too many event listeners.' });
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Content-Type-Options': 'nosniff'
+      });
+      res.write(': connected\n\n');
+      streams.add(res);
+      const heartbeat = setInterval(() => { if (!res.destroyed) res.write(': ping\n\n'); }, 20000);
+      req.on('close', () => { clearInterval(heartbeat); streams.delete(res); });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/agent/run') {
+      const origin = req.headers.origin;
+      if (origin !== `http://${host}` || !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+        return sendJson(res, 403, { error: 'Same-origin JSON request required.' });
+      }
+      if (activeAgent || Date.now() - lastAgentStart < 800) return sendJson(res, 429, { error: 'Another agent run is active or was started too recently.' });
+      let raw = '';
+      try {
+        for await (const chunk of req) {
+          raw += chunk.toString('utf8');
+          if (Buffer.byteLength(raw) > 4096) return sendJson(res, 413, { error: 'Request is too large.' });
+        }
+      } catch { return sendJson(res, 400, { error: 'Could not read request body.' }); }
+      let body;
+      try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'Invalid JSON request.' }); }
+      if (!body || typeof body.prompt !== 'string' || !body.prompt.trim() || body.prompt.length > 2000) {
+        return sendJson(res, 400, { error: 'Prompt must be 1–2,000 characters.' });
+      }
+      lastAgentStart = Date.now();
+      activeAgent = true;
+      try {
+        const result = await runAgent({ prompt: body.prompt, store, workspaceRoot, chat: args => agentClient.chat(args), model: agentClient.model });
+        return sendJson(res, 200, result);
+      } catch (error) {
+        const unavailable = /Cannot reach Ollama|model .* unavailable|Ollama timed out/i.test(error.message);
+        return sendJson(res, unavailable ? 503 : 502, { error: error.message });
+      } finally { activeAgent = false; }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/demo/run') {
+      // Browsers cannot POST cross-origin with JSON without a CORS preflight.
+      // Also compare the Origin explicitly to avoid local CSRF.
+      const origin = req.headers.origin;
+      if (origin !== `http://${host}` || !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+        return sendJson(res, 403, { error: 'Same-origin JSON request required.' });
+      }
+      const now = Date.now();
+      if (activeDemo || now - lastDemoStart < 500) return sendJson(res, 429, { error: 'A demo run is already active or was started too recently.' });
+      lastDemoStart = now;
+      activeDemo = true;
+      try {
+        const result = await runDemo({ store, workspaceRoot });
+        return sendJson(res, 200, result);
+      } catch {
+        return sendJson(res, 500, { error: 'Demo execution failed.' });
+      } finally {
+        activeDemo = false;
+      }
+    }
+
+    if (req.method === 'GET' && publicFiles[url.pathname]) {
+      const [name, contentType] = publicFiles[url.pathname];
+      const file = join(root, 'public', name);
+      if (!existsSync(file)) return sendJson(res, 404, { error: 'File not found' });
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        'Referrer-Policy': 'no-referrer'
+      });
+      return res.end(readFileSync(file));
+    }
+    sendJson(res, 404, { error: 'Not found.' });
+  });
+  const originalClose = server.close.bind(server);
+  server.close = callback => {
+    for (const stream of streams) stream.end();
+    streams.clear();
+    store.off('event', onEvent);
+    return originalClose(callback);
+  };
+  return { server, store };
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const { server } = createBlackBoxServer();
+  const port = Number(process.env.PORT ?? '4317');
+  server.listen(port, '127.0.0.1', () => {
+    console.log(`\n  AGENT BLACK BOX  v0.2\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
+  });
+}
