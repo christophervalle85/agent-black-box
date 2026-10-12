@@ -1,9 +1,8 @@
-import { StringDecoder } from 'node:string_decoder';
 
 // Framing for the legacy MCP stdio binding: one UTF-8 JSON-RPC message per line.
 // Explicit byte bounds apply even to a peer that never sends a terminating newline.
 export function readJsonLines(stream, { onMessage, onError, maxBytes = 131072 }) {
-  const decoder = new StringDecoder('utf8');
+  const decoder = new TextDecoder('utf-8', {fatal:true});
   let buffer = '';
   let failed = false;
   function fail(message) {
@@ -14,7 +13,7 @@ export function readJsonLines(stream, { onMessage, onError, maxBytes = 131072 })
   }
   function consume(chunk) {
     if (failed) return;
-    buffer += decoder.write(chunk);
+    try { buffer += decoder.decode(chunk, {stream:true}); } catch { return fail('Invalid UTF-8 in MCP frame.'); }
     if (Buffer.byteLength(buffer) > maxBytes && !buffer.includes('\n')) return fail('MCP line exceeds limit.');
     for (;;) {
       const index = buffer.indexOf('\n');
@@ -31,7 +30,10 @@ export function readJsonLines(stream, { onMessage, onError, maxBytes = 131072 })
     if (Buffer.byteLength(buffer) > maxBytes) fail('MCP frame exceeds limit.');
   }
   stream.on('data', consume);
-  stream.on('end', () => { if (buffer.trim()) fail('Truncated MCP frame.'); });
+  stream.on('end', () => {
+    try { decoder.decode(); } catch { return fail('Truncated UTF-8 MCP frame.'); }
+    if (buffer.trim()) fail('Truncated MCP frame.');
+  });
   stream.on('error', error => fail(error.message));
   return () => stream.off('data', consume);
 }
@@ -87,8 +89,11 @@ export class McpPeer {
         this.pending.delete(id);
         clearTimeout(wait.timer);
         wait.cleanup();
-        try { this.notify('notifications/cancelled', { requestId: id, reason: 'Client cancelled.' }); } catch {}
-        reject(new Error('MCP request cancelled.'));
+        // A downstream operation may ignore a cancellation notification.
+        // Terminate the process and refuse further operations. Any already
+        // performed side effect remains outcome-uncertain (not rolled back).
+        this.close(new Error('Downstream cancelled; side-effect outcome uncertain.'));
+        reject(new Error('MCP request cancelled; downstream terminated.'));
       };
       const cleanup = () => signal?.removeEventListener('abort', cancel);
       const timer = setTimeout(() => {

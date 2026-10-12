@@ -1,4 +1,4 @@
-# v0.4 MCP gateway: compatibility, security and operator guide
+# v0.5 MCP gateway: interoperability, security and operator guide
 
 ## What is implemented
 
@@ -23,11 +23,16 @@ Demo workspace
 
 The existing dashboard on `127.0.0.1:4317` is the approval controller. All MCP lifecycle events appear in the same local audit file. Because the gateway runs in a separate process, the dashboard also polls its audit projection every 3 seconds; its Server-Sent Events channel covers events originating from the dashboard process only.
 
-## Supported protocol scope
+## Protocol compatibility (official 2026-07-28 specification)
 
-This gateway speaks the **legacy MCP stdio protocol version `2025-11-25`**. It supports `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`, and `notifications/cancelled`. It declares **only** the `tools` capability. It rejects resources, prompts, logging, sampling, roots, elicitation, task-augmented execution, unsolicited downstream requests, and other unsupported methods. It does not support the **2026-07-28 stateless** `server/discover` flow. An MCP client in legacy mode is required; an SDK v2 client with automatic negotiation may fall back depending on its configuration.
+On a new **stdio connection**, the gateway pins one of two protocol eras:
 
-**This is a deliberately bounded JSON-RPC implementation, not the complete MCP SDK or a certification of protocol conformance.** For broad server compatibility, adopt the official `@modelcontextprotocol/server` and `@modelcontextprotocol/client` v2 SDKs, use the v2 `serveStdio` negotiation entry point, and add interoperability tests with real host applications. There are no new runtime npm dependencies in v0.4.
+- **Legacy `2025-11-25`:** `initialize` followed by `notifications/initialized`, then `tools/list`, `tools/call`, `ping`, cancellation. The downstream receives its own separate legacy handshake and initialized notification **before tool discovery**.
+- **Modern `2026-07-28`:** `server/discover` with `params._meta` protocol version/client capabilities; no initialize handshake; version/identity/capabilities validated **for each request**. `tools/list` and `tools/call` respond with modern `resultType: "complete"` and `_meta['io.modelcontextprotocol/serverInfo']`. Unknown versions receive `-32022` with supported versions. A connection cannot switch eras.
+
+There is **no direct network MCP listener**. Other RPC families including resources, prompts, sampling, subscriptions, task extensions, and multi-round-trip `input_required` are not supported. Modern `ping` is not a supported method. Only `read_note` and `write_note` are exposed; downstream `shell_command` remains hidden and denied. Tool-call results are limited to the bundled text-only notes server.
+
+We intentionally keep a compact, manually maintained wire implementation because this is a **gateway prototype**, not a complete SDK server. An official `@modelcontextprotocol/client` v2 interoperability suite runs in CI for both protocol eras, alongside the dependency-free tests. Full adoption of the official v2 **server** SDK, remote transports and arbitrary downstream targets is **not claimed**.
 
 ## Test it today
 
@@ -36,7 +41,8 @@ From the repository root (Node.js >=22):
 ```bash
 npm test             # protocol parsing, real downstream stdio calls, approval, denial, cancellation, timeouts
 npm start            # terminal 1: keep approval dashboard open
-npm run mcp:smoke    # terminal 2: actual external MCP client; performs read and block tests
+npm run mcp:smoke    # terminal 2: 2025 legacy client, read and denial
+npm run mcp:modern   # terminal 2: 2026-07-28 modern client, read and denial
 npm run mcp:approval # terminal 2: also requests note creation; approve/deny in dashboard
 ```
 
@@ -75,14 +81,14 @@ Start the **dashboard first** so it can generate its ephemeral token. The token 
 3. **Time-limited explicit approval**: `write_note` pauses in the guarded callback, generates a unique ID, and submits the immutable filename/content to the localhost approval queue. Only a matching one-time approval permits the pending downstream `tools/call`. Denied, expired, disconnected, and unavailable approvals cannot authorize a write.
 4. **Audit**: Events are appended with bounded, redacted input summaries. A request is represented by a stable `approvalId` and separate start/result records; the dashboard groups these into one visible request with a timeline. Audit payloads intentionally omit file contents and raw tool outputs.
 5. **Process boundaries**: The gateway uses `spawn(process.execPath, [...], { shell:false })` to launch **only the bundled downstream**. The child receives a restricted environment that excludes the approval bearer token and other inherited secrets.
-6. **Protocol limits**: 16 KiB inbound JSON-RPC message bound, 64 KiB outbound downstream request bound, 128 KiB downstream response bound, max eight in-flight calls, 12-second downstream deadline, and a 90-second approval deadline. Oversized frames and unexpected server-initiated requests close the downstream connection.
-7. **Cancellation**: If the host cancels before forwarding, the approval request aborts and the callback is never invoked. Once forwarded, cancellation cannot guarantee rollback of a side effect; the gateway explicitly does not promise that.
+6. **Protocol limits**: 16 KiB inbound JSON-RPC message bound, 64 KiB outbound downstream request bound, 128 KiB downstream response bound, max eight in-flight calls, 12-second downstream deadline, and a 90-second approval deadline. Incoming frames must be valid UTF-8 (malformed byte sequences are rejected). Oversized frames and unexpected server-initiated requests close the downstream connection.
+7. **Cancellation**: If the host cancels before forwarding, the approval request aborts and the callback is never invoked. Once forwarded, cancellation terminates the downstream process, but **cannot guarantee rollback** of a side effect that already happened. The audit records `MCP_OUTCOME_UNKNOWN` for a post-forward cancellation; do not interpret it as a prevented write.
 
 ## Known limitations (important)
 
 - **No OS sandbox**: the downstream process runs with the same filesystem credentials as the local user. An app that bypasses the gateway can invoke the downstream directly. Policy enforcement is *routing-dependent*. Do not connect untrusted or privileged third-party servers yet.
-- **Not modern MCP**: the 2026-07-28 protocol era has different initialization and per-request metadata. The gateway is a 2025-11-25-only educational adapter; latest SDK clients should use legacy fallback.
-- **Not fully interoperable**: the custom narrow JSON-RPC implementation is tested with its own real stdio client/server pair, not with all commercial MCP hosts or the official SDK. This is not proof of general MCP conformance.
+- **Not complete modern MCP**: the 2026-07-28 era requires many surfaces we do not implement. This is a bounded stdio `server/discover`/tool subset, not a certification of protocol conformance.
+- **Interoperability bounds**: the custom JSON-RPC implementation has official MCP v2 *client* interoperability tests in GitHub Actions, but no full conformance certification, Streamable HTTP, or broad commercial-host test matrix. This is not proof of general MCP conformance.
 - **Same-user threat**: a local process running as the same OS user can read the controller token. The dashboard also lacks multi-user authentication. Never expose the controller over a network.
 - **Race / filesystem semantics**: canonical-path checks are best-effort; a separate low-privilege OS sandbox, directory-fd confinement, and mount isolation are needed before operating on untrusted files.
 - **Not exactly-once or crash-durable**: if a downstream call times out or the process dies after doing work, its effect may have happened. Approval state lives in memory; an abrupt process death may leave an orphaned pending audit event.
@@ -97,3 +103,11 @@ Start the **dashboard first** so it can generate its ephemeral token. The token 
 - [MCP 2026-07-28 stateless transport semantics](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
 - [Official TypeScript SDK v2, the stable release line](https://ts.sdk.modelcontextprotocol.io/v2/)
 - [Official v2 protocol-era migration](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28)
+
+### v0.5 official references
+
+- [MCP 2026-07-28 versioning & backward compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)
+- [MCP 2026-07-28 stdio transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio)
+- [MCP 2026-07-28 tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
+- [Official TypeScript SDK v2 protocol-era negotiation](https://ts.sdk.modelcontextprotocol.io/v2/protocol-versions)
+- [Official TypeScript SDK v2 migration details](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28)

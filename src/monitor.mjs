@@ -104,7 +104,13 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
     return { event, result: result?.value };
   } catch (error) {
     event.outcome = 'error';
-    event.summary = 'Execution failed; raw error details withheld from audit storage.';
+    if (signal?.aborted) {
+      event.ruleId = 'MCP_OUTCOME_UNKNOWN';
+      event.reason = 'The client cancelled after execution began. Side effects may have already occurred.';
+      event.summary = 'Downstream was cancelled; execution outcome is uncertain, not safely rolled back.';
+    } else {
+      event.summary = 'Execution failed; raw error details withheld from audit storage.';
+    }
     event.durationMs = Math.round((performance.now() - start) * 10) / 10;
     store.add(event);
     return { event, result: null, error };

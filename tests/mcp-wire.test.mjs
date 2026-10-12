@@ -36,3 +36,23 @@ test('MCP line sender rejects oversized outbound data',()=>{
   const out=new PassThrough();
   assert.throws(()=>sendJsonLine(out,{jsonrpc:'2.0',id:1,result:'x'.repeat(300)},120),/exceeded/);
 });
+
+test('MCP parser rejects ill-formed UTF-8 rather than replacing malformed bytes',async()=>{
+  const input=new PassThrough();const issues=[];
+  readJsonLines(input,{onMessage:()=>assert.fail('must reject malformed UTF-8'),onError:e=>issues.push(e.message)});
+  input.write(Buffer.from([0xc3,0x28,0x0a]));
+  await tick();
+  assert.match(issues[0],/UTF-8/);
+});
+
+test('MCP peer kills the downstream on cancellation after forwarding',async()=>{
+  const child=new EventEmitter();child.stdout=new PassThrough();child.stdin=new PassThrough();child.killed=false;
+  child.kill=()=>{child.killed=true;};
+  const peer=new McpPeer(child,{timeoutMs:2000});
+  const c=new AbortController();
+  const request=peer.request('tools/call',{name:'write_note'}, {signal:c.signal});
+  c.abort();
+  await assert.rejects(request,/cancelled|uncertain/i);
+  assert.equal(child.killed,true);
+  await assert.rejects(peer.request('tools/list'),/unavailable/i);
+});

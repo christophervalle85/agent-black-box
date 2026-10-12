@@ -171,3 +171,69 @@ test('MCP blocks traversal, unsafe writes, unregistered tools, and duplicate act
   await sleep(60);
   assert.equal(existsSync(join(workspaceRoot,'pending.txt')),false);
 }));
+
+const META = Object.freeze({
+  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+  'io.modelcontextprotocol/clientCapabilities': {},
+  'io.modelcontextprotocol/clientInfo': {name:'interoperability-test',version:'1.0.0'}
+});
+const modern = (params={}) => ({...params,_meta:{...META}});
+
+test('modern stdio: server/discover, per-request metadata and complete tool results',()=>fixture(async({client,workspaceRoot,controller})=>{
+  const discover=await client.request('server/discover',modern()).p;
+  assert.deepEqual(discover.result.supportedVersions,['2026-07-28']);
+  assert.equal(discover.result.resultType,'complete');
+  assert.equal(discover.result._meta['io.modelcontextprotocol/serverInfo'].name,'agent-black-box-gateway');
+  const list=await client.request('tools/list',modern()).p;
+  assert.equal(list.result.resultType,'complete');
+  assert.deepEqual(list.result.tools.map(x=>x.name),['read_note','write_note']);
+  const read=await client.request('tools/call',modern({name:'read_note',arguments:{path:'notes.txt'}})).p;
+  assert.equal(read.result.resultType,'complete');
+  assert.match(read.result.content[0].text,/MCP integration test/);
+  const unsafe=await client.request('tools/call',modern({name:'read_note',arguments:{path:'.env'}})).p;
+  assert.equal(unsafe.result.isError,true);
+  assert.match(unsafe.result.content[0].text,/DENY_SENSITIVE_FILE/);
+  assert.equal((await client.request('resources/list',modern()).p).error.code,-32601);
+  assert.equal((await client.request('ping',modern()).p).error.code,-32601);
+  assert.equal(controller.store.stats().total,2);
+  assert.equal(existsSync(join(workspaceRoot,'.env')),false);
+}));
+
+test('modern stdio: missing metadata and unknown versions fail closed without execution',()=>fixture(async({client,controller})=>{
+  const invalid=await client.request('server/discover',{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}).p;
+  assert.equal(invalid.error.code,-32602);
+  const wrong=await client.request('server/discover',{_meta:{...META,'io.modelcontextprotocol/protocolVersion':'2099-01-01'}}).p;
+  assert.equal(wrong.error.code,-32022);
+  assert.deepEqual(wrong.error.data.supported,['2026-07-28','2025-11-25']);
+  const discover=await client.request('server/discover',modern()).p;
+  assert.equal(discover.result.resultType,'complete');
+  const unauth=await client.request('tools/call',{name:'read_note',arguments:{path:'notes.txt'}}).p;
+  assert.equal(unauth.error.code,-32602);
+  const badVersion=await client.request('tools/call',{name:'read_note',arguments:{path:'notes.txt'},_meta:{...META,'io.modelcontextprotocol/protocolVersion':'1999-01-01'}}).p;
+  assert.equal(badVersion.error.code,-32022);
+  const unsupported=await client.request('tools/call',modern({name:'read_note',arguments:{path:'notes.txt'},requestState:'forged'})).p;
+  assert.equal(unsupported.error.code,-32602);
+  assert.equal(controller.store.stats().total,0);
+  assert.equal((await client.request('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'bad',version:'1'}}).p).error.code,-32600);
+}));
+
+test('modern stdio: approval-gated write resumes on exact operator authorization',()=>fixture(async({client,controller,workspaceRoot})=>{
+  await client.request('server/discover',modern()).p;
+  const pending=client.request('tools/call',modern({name:'write_note',arguments:{path:'modern.txt',content:'Modern MCP approval.'}}));
+  const p=await waitForApproval(controller);
+  assert.equal(existsSync(join(workspaceRoot,'modern.txt')),false);
+  controller.approvalQueue.finish(p.id,true);
+  const result=await pending.p;
+  assert.equal(result.result.resultType,'complete');
+  assert.equal(result.result.isError,undefined);
+  assert.equal(readFileSync(join(workspaceRoot,'modern.txt'),'utf8'),'Modern MCP approval.');
+  const grouped=controller.store.activity();
+  assert.equal(grouped.length,1);
+  assert.equal(grouped[0].events.length,2);
+}));
+
+test('legacy stdio and modern stdio cannot switch eras mid-connection',()=>fixture(async({client})=>{
+  await client.initialize();
+  const modernProbe=await client.request('server/discover',modern()).p;
+  assert.equal(modernProbe.error.code,-32601);
+}));

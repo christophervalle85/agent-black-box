@@ -1,8 +1,8 @@
-# Agent Black Box · v0.4
+# Agent Black Box · v0.5
 
-**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 adds a real local MCP stdio gateway**, forwarding permitted calls to a separate downstream MCP notes server.
+**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 added a real local MCP stdio gateway; v0.5 adds dual-era protocol support and harder cancellation semantics**, forwarding permitted calls to a separate downstream MCP notes server.
 
-![Status](https://img.shields.io/badge/MVP-v0.4-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
+![Status](https://img.shields.io/badge/MVP-v0.5-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
 ## Quick start
 
@@ -38,19 +38,26 @@ OLLAMA_MODEL=qwen3:8b npm start # pull that model first
 
 No cloud API key or npm dependency installation is required. The model download is a few gigabytes and needs sufficient memory. Data persists to the gitignored `data/audit.jsonl` file; Ctrl+C stops the server.
 
-## v0.4: Real MCP stdio gateway
+## v0.5: Interoperability and gateway hardening
 
-This is a **bounded MCP gateway**, not generic third-party server interception or full modern-MCP compatibility. It implements the 2025-11-25 legacy stdio handshake and only permits `read_note` and approval-gated `write_note` to the bundled downstream MCP server. Unknown tools and unsupported protocol operations fail closed. Read [the MCP operator/security guide](docs/MCP_GATEWAY.md) before connecting any MCP client.
+This release extends the **strictly allowlisted local MCP stdio gateway** to accept both 2025-11-25 *legacy* initialization and 2026-07-28 *modern* `server/discover` with per-request metadata. The gateway translates to its fixed, bundled legacy downstream notes server. It exposes only `read_note` and human-approved `write_note`; no untrusted third-party MCP server is launched.
 
 ```bash
-npm start             # keep this running: controller and approval UI
-npm run mcp:smoke     # new terminal: live stdio MCP read and policy denial
-npm run mcp:approval  # new terminal: create a new note with one-time human approval
+npm test                  # dependency-free regression suite
+npm run mcp:smoke         # 2025 legacy MCP client
+npm run mcp:modern        # 2026-07-28 modern MCP client
+npm start                 # dashboard for manual approvals (another terminal)
+npm run mcp:approval      # legacy approval smoke (another terminal)
 ```
 
-To use another stdio MCP host, configure the `node src/mcp-gateway.mjs` command using an absolute path as explained in the guide. The original Ollama dashboard agent still uses its existing built-in guarded adapters; MCP hosts connect to the **separate gateway process**. MCP events appear in the shared Activity log, refreshed periodically.
+**Official SDK client interoperability** also runs as a separate GitHub CI job against pinned `@modelcontextprotocol/client@2.3.1`, testing legacy, modern-pinned and automatic negotiation. To execute it locally after installing the client test dependency:
 
-**Important:** The official TypeScript MCP SDK v2 supports the new 2026-07-28 protocol. Our deliberately narrow v0.4 wire gateway supports only legacy 2025-11-25 and is tested with a bundled client/server pair. Broad host and server support, official-SDK migration, and stronger OS isolation are future work—not completed features.
+```bash
+npm install --no-save --package-lock=false @modelcontextprotocol/client@2.3.1
+npm run test:mcp-sdk
+```
+
+The **runtime remains dependency-free**; the official SDK is currently used for cross-implementation *testing*, not as the gateway's internal runtime. The modern stdio support is a tightly bounded tool-only subset, not full MCP spec conformance or generic gateway interoperability. See [the MCP operator/security guide](docs/MCP_GATEWAY.md) for the threat model, transport compatibility, limitations, and official specification sources.
 
 ## Architecture
 

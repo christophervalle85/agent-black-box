@@ -1,10 +1,10 @@
 /**
- * Agent Black Box v0.4: a deliberately narrow legacy MCP stdio gateway.
- * Supported: initialize, initialized, ping, tools/list, tools/call,
- * cancellation. Everything else is rejected (not transparently forwarded).
+ * Agent Black Box: dual-era, allowlisted MCP stdio gateway.
+ * 2025-11-25: legacy initialize / initialized handshake.
+ * 2026-07-28: per-request metadata and server/discover, no handshake.
  *
- * IMPORTANT: only the bundled downstream MCP demo is launched. No shell,
- * network MCP servers, arbitrary commands, or model-supplied executables.
+ * Deliberately NOT a generic pass-through: two safe demo tools only, one
+ * fixed downstream executable. Do not expose this as a network service.
  */
 import { spawn } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
@@ -16,127 +16,176 @@ import { guardedToolCall } from './monitor.mjs';
 import { McpPeer, readJsonLines, sendJsonLine } from './mcp-wire.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ALLOWED = Object.freeze({read_note:'file.read',write_note:'file.write'});
-const schema = {type:'object',additionalProperties:false};
+const LEGACY = '2025-11-25';
+const MODERN = '2026-07-28';
+const SUPPORTED = Object.freeze([MODERN, LEGACY]);
+const IDENTITY = Object.freeze({ name: 'agent-black-box-gateway', version: '0.5.0' });
+const ALLOWED = Object.freeze({ read_note: 'file.read', write_note: 'file.write' });
+const schema = { type: 'object', additionalProperties: false };
 const EXPOSED_TOOLS = Object.freeze([
-  {name:'read_note',description:'Read a regular UTF-8 file from the demo workspace. Sensitive files and path escapes are denied.',inputSchema:{...schema,properties:{path:{type:'string'}},required:['path']}},
-  {name:'write_note',description:'Create one new top-level .txt note in the demo workspace. Requires a one-time human approval in the Black Box dashboard.',inputSchema:{...schema,properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}
+  { name: 'read_note', description: 'Read UTF-8 data from the demo workspace, subject to path and credential policy.', inputSchema: { ...schema, properties: { path: { type: 'string' } }, required: ['path'] } },
+  { name: 'write_note', description: 'Create a new demo .txt note after one-time human approval of exact filename and content.', inputSchema: { ...schema, properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path','content'] } }
 ]);
-const fail = (id,code,message) => ({jsonrpc:'2.0',id,error:{code,message}});
+const fail = (id,code,message,data) => ({jsonrpc:'2.0',id,error:{code,message,...(data?{data}:{})}});
 const toolFailure = message => ({content:[{type:'text',text:message}],isError:true});
+const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+const versionMeta = params => object(params?._meta) ? params._meta['io.modelcontextprotocol/protocolVersion'] : undefined;
+const stamp = result => ({...result,_meta:{...(object(result._meta)?result._meta:{}),'io.modelcontextprotocol/serverInfo':IDENTITY},resultType:'complete'});
 
-function validArgs(name, args) {
-  if (!args || typeof args !== 'object' || Array.isArray(args) ||
-      Object.keys(args).some(key => !['path','content'].includes(key))) return false;
+function validArgs(name,args) {
+  if (!object(args) || Object.keys(args).some(key => !['path','content'].includes(key))) return false;
   if (typeof args.path !== 'string') return false;
   if (name === 'read_note') return Object.keys(args).length === 1;
   return name === 'write_note' && Object.keys(args).length === 2 && typeof args.content === 'string';
 }
 
-export async function startGateway({ input = process.stdin, output = process.stdout, env = process.env, onReady } = {}) {
+export async function startGateway({ input=process.stdin, output=process.stdout, env=process.env, onReady }={}) {
   const workspaceRoot = realpathSync(resolve(env.MCP_WORKSPACE_ROOT ?? join(root,'demo-workspace')));
   const auditFile = resolve(env.MCP_AUDIT_FILE ?? join(root,'data','audit.jsonl'));
   const tokenFile = resolve(env.MCP_TOKEN_FILE ?? join(dirname(auditFile),'mcp-controller-token'));
   const port = Number(env.MCP_CONTROLLER_PORT ?? 4317);
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw Error('MCP_CONTROLLER_PORT must be valid.');
+  if (!Number.isSafeInteger(port) || port<1 || port>65535) throw Error('Invalid MCP_CONTROLLER_PORT.');
   const store = new AuditStore(auditFile);
   const downstream = spawn(process.execPath,[fileURLToPath(new URL('../examples/mcp-notes-server.mjs',import.meta.url))],{
     cwd:root, shell:false, stdio:['pipe','pipe','inherit'],
-    env:{BLACKBOX_WORKSPACE_ROOT:workspaceRoot, LANG:'C.UTF-8',PATH:process.env.PATH??'/usr/bin:/bin'}
+    env:{BLACKBOX_WORKSPACE_ROOT:workspaceRoot,LANG:'C.UTF-8',PATH:process.env.PATH??'/usr/bin:/bin'}
   });
   const peer = new McpPeer(downstream,{timeoutMs:12000});
-  let initialized = false, connected = false, closed = false;
+  let era = null; // one process cannot switch from modern to legacy (or reverse)
+  let initialized = false, closed = false, downstreamPromise;
   const active = new Map();
-  const gatewayRunId = randomUUID();
-  const write = msg => { if (!closed) sendJsonLine(output,msg); };
-  async function requestApproval(request,{signal}) {
-    if (signal.aborted) return {approved:false};
-    // The bearer token never goes to the AI client or the downstream server.
-    const token = readFileSync(tokenFile,'utf8').trim();
-    const body = JSON.stringify({ id:request.id,runId:request.runId,agentId:request.agentId,tool:request.tool,args:request.args });
-    const response = await fetch(`http://127.0.0.1:${port}/api/mcp/approval`,{
-      method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json','host':`127.0.0.1:${port}`},body,signal:AbortSignal.any([signal,AbortSignal.timeout(95000)])
-    });
-    if (!response.ok) return {approved:false};
-    const result = await response.json();
-    return {approved:result.approved === true && !signal.aborted};
+  const runId = randomUUID();
+  const write = msg => { if(!closed) sendJsonLine(output,msg); };
+  const answer = (id,result) => write({jsonrpc:'2.0',id,result:era==='modern'?stamp(result):result});
+  const error = (id,code,message,data) => write(fail(id,code,message,data));
+  const incompatible = (id,version) => error(id,-32022,'Unsupported protocol version.',{supported:SUPPORTED,requested:version ?? null});
+
+  // Downstream is pinned to the bundled, audited 2025-era notes executable.
+  // It needs the initialized notification BEFORE tools/list (the v0.4 order
+  // violated the legacy lifecycle). A single promise prevents init races.
+  async function ensureDownstream() {
+    if (!downstreamPromise) downstreamPromise = (async()=>{
+      const result=await peer.request('initialize',{protocolVersion:LEGACY,capabilities:{},clientInfo:IDENTITY});
+      if(result.protocolVersion!==LEGACY || !object(result.capabilities?.tools))throw Error('Unsupported downstream protocol/capabilities.');
+      peer.notify('notifications/initialized');
+      const listed=await peer.request('tools/list',{});
+      if(!Array.isArray(listed?.tools) || !['read_note','write_note'].every(name => listed.tools.filter(x=>x?.name===name).length===1)) throw Error('Required downstream tools missing or duplicated.');
+      // An allowlisted name must actually have the expected input interface.
+      for (const name of Object.keys(ALLOWED)) {
+        const tool=listed.tools.find(x=>x.name===name);
+        if(!object(tool.inputSchema) || tool.inputSchema.type!=='object' || !object(tool.inputSchema.properties) ||
+          !Array.isArray(tool.inputSchema.required) || !(['path',...(name==='write_note'?['content']:[])].every(key=>tool.inputSchema.required.includes(key) && tool.inputSchema.properties[key]?.type==='string')))
+          throw Error('Downstream tool schema changed; refusing startup.');
+      }
+    })().catch(err=>{peer.close(err);throw err;});
+    return downstreamPromise;
   }
-  async function dispatch(message) {
-    const id=message.id;
-    const method=message.method;
-    if (method === 'initialize') {
-      if (connected || !message.params || typeof message.params.protocolVersion !== 'string') return write(fail(id,-32600,'Invalid initialization.'));
-      // The gateway supports ONLY the 2025-11-25 protocol. Older clients may
-      // disconnect if they cannot negotiate this version, as specified by MCP.
-      try {
-        const result=await peer.request('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'agent-black-box-gateway',version:'0.4.0'}});
-        if (result.protocolVersion !== '2025-11-25' || !result.capabilities?.tools) throw Error('Downstream incompatible.');
-        const discovered = await peer.request('tools/list', {});
-        const names = discovered?.tools?.map(tool => tool.name);
-        if (!Array.isArray(names) || !['read_note','write_note'].every(name => names.filter(n => n === name).length === 1))
-          throw Error('Required downstream MCP tools missing or ambiguous.');
-      } catch { return write(fail(id,-32000,'MCP downstream initialization failed.')); }
-      connected=true;
-      return write({jsonrpc:'2.0',id,result:{protocolVersion:'2025-11-25',capabilities:{tools:{}},serverInfo:{name:'agent-black-box-gateway',version:'0.4.0'}}});
+
+  function checkModern(id,params){
+    const meta=params?._meta;
+    if(!object(params)||!object(meta) || typeof meta['io.modelcontextprotocol/protocolVersion']!=='string' ||
+        !object(meta['io.modelcontextprotocol/clientCapabilities']) ||
+        (meta['io.modelcontextprotocol/clientInfo']!==undefined &&
+          (!object(meta['io.modelcontextprotocol/clientInfo']) || typeof meta['io.modelcontextprotocol/clientInfo'].name!=='string' || typeof meta['io.modelcontextprotocol/clientInfo'].version!=='string'))) {
+      error(id,-32602,'Missing or invalid modern MCP request metadata.'); return false;
     }
-    if (!connected || !initialized) return write(fail(id,-32002,'MCP session not initialized.'));
-    if (method === 'ping') return write({jsonrpc:'2.0',id,result:{}});
-    if (method === 'tools/list') {
-      if (message.params?.cursor) return write(fail(id,-32602,'No tool pagination supported.'));
-      return write({jsonrpc:'2.0',id,result:{tools:EXPOSED_TOOLS}});
+    const version=versionMeta(params);
+    if(version!==MODERN){incompatible(id,version);return false;}
+    return true;
+  }
+
+  async function requestApproval(request,{signal}) {
+    if(signal.aborted)return {approved:false};
+    const token = readFileSync(tokenFile,'utf8').trim();
+    const body=JSON.stringify({id:request.id,runId:request.runId,agentId:request.agentId,tool:request.tool,args:request.args});
+    const response=await fetch(`http://127.0.0.1:${port}/api/mcp/approval`,{
+      method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body,
+      signal:AbortSignal.any([signal,AbortSignal.timeout(95000)])
+    });
+    if(!response.ok)return {approved:false};
+    const result=await response.json();
+    return {approved:result.approved===true && !signal.aborted};
+  }
+
+  async function dispatch(msg) {
+    const {id,method}=msg;
+    // Allow modern clients to probe without an initialize handshake.
+    if(method==='server/discover') {
+      if(era==='legacy')return error(id,-32601,'Method not supported by legacy MCP session.');
+      if(!checkModern(id,msg.params))return;
+      era='modern'; // pin the protocol era before async initialization
+      try{await ensureDownstream();}catch{return error(id,-32000,'MCP downstream unavailable.');}
+      return answer(id,{supportedVersions:[MODERN],capabilities:{tools:{}},ttlMs:0,cacheScope:'private'});
     }
-    if (method !== 'tools/call') return write(fail(id,-32601,'Method not permitted by MCP gateway.'));
-    if (active.has(id)) return write(fail(id,-32600,'Duplicate active request ID.'));
-    if (active.size >= 8) return write(fail(id,-32000,'Gateway concurrency limit exceeded.'));
-    const name=message.params?.name;
-    const args=message.params?.arguments;
-    if (typeof name !== 'string' || name.length > 128 || typeof args !== 'object' || !args || Array.isArray(args)) return write(fail(id,-32602,'Invalid tool parameters.'));
-    if (JSON.stringify(args).length > 3500) return write(fail(id,-32602,'Tool arguments too large.'));
-    if (typeof id !== 'string' && typeof id !== 'number') return;
-    const abort=new AbortController(); active.set(id,abort);
+    if(method==='initialize') {
+      if(era || !object(msg.params) || typeof msg.params.protocolVersion!=='string')return error(id,-32600,'Invalid or repeated MCP initialization.');
+      // For backwards compatibility the server only negotiates our tested
+      // legacy protocol, rather than falsely echoing unsupported revisions.
+      if(msg.params.protocolVersion!==LEGACY)return error(id,-32602,'Legacy protocol 2025-11-25 required.');
+      if(!object(msg.params.capabilities)||!object(msg.params.clientInfo))return error(id,-32602,'Invalid client initialization parameters.');
+      era='legacy'; // prevent concurrent or mixed-era handshakes
+      try{await ensureDownstream();}catch{return error(id,-32000,'MCP downstream initialization failed.');}
+      return answer(id,{protocolVersion:LEGACY,capabilities:{tools:{}},serverInfo:IDENTITY});
+    }
+    if(!era)return error(id,-32002,'Initialize or discover the MCP server first.');
+    if(era==='legacy' && !initialized)return error(id,-32002,'Legacy MCP session not initialized.');
+    if(era==='modern' && !checkModern(id,msg.params))return;
+    if(method==='ping' && era==='legacy')return answer(id,{});
+    if(method==='tools/list') {
+      if((msg.params!==undefined && !object(msg.params)) || (msg.params?.cursor!==undefined && msg.params.cursor!==null))return error(id,-32602,'No tool pagination supported.');
+      return answer(id,{tools:EXPOSED_TOOLS});
+    }
+    if(method!=='tools/call')return error(id,-32601,'Method not permitted by MCP gateway.');
+    if(active.has(id))return error(id,-32600,'Duplicate active request ID.');
+    if(active.size>=8)return error(id,-32000,'Gateway concurrency limit exceeded.');
+    if(!object(msg.params) || typeof msg.params.name!=='string' || msg.params.name.length>128 || !object(msg.params.arguments))return error(id,-32602,'Invalid MCP tool parameters.');
+    if(JSON.stringify(msg.params.arguments).length>3500)return error(id,-32602,'Tool arguments too large.');
+    // Disallow modern multi-round-trip request payloads we cannot enforce.
+    if(era==='modern' && (msg.params.requestState!==undefined || msg.params.inputResponses!==undefined))return error(id,-32602,'Multi-round-trip MCP requests not supported.');
+    const {name}=msg.params, args=msg.params.arguments;
+    const abort=new AbortController();active.set(id,abort);
     try {
-      const allowedName=Object.hasOwn(ALLOWED,name);
-      // Unregistered tools are audited and denied, not forwarded.
-      const tool=allowedName?ALLOWED[name]:`mcp.unknown.${name.slice(0,40)}`;
-      const safeArgs=validArgs(name,args) ? structuredClone(args) : {};
+      const tool=Object.hasOwn(ALLOWED,name)?ALLOWED[name]:`mcp.unknown.${name.slice(0,40)}`;
+      const safeArgs=validArgs(name,args)?structuredClone(args):{};
       const checked=await guardedToolCall({
-        agentId:'mcp-client',runId:gatewayRunId,tool,args:safeArgs,store,workspaceRoot,
+        agentId:'mcp-client',runId,tool,args:safeArgs,store,workspaceRoot,
         source:'mcp-stdio',recordStart:true,signal:abort.signal,
         requestApproval:req=>requestApproval(req,{signal:abort.signal}),
         execute:async fixedArgs=>{
-          if (abort.signal.aborted) throw Error('MCP call cancelled.');
-          const answer=await peer.request('tools/call',{name,arguments:fixedArgs},{signal:abort.signal});
-          if (!Array.isArray(answer.content) || answer.isError) throw Error('Downstream tool execution failed.');
-          return {value:answer,summary:`MCP tool ${name} executed; result contents not logged.`};
+          if(abort.signal.aborted)throw Error('MCP call cancelled.');
+          const response=await peer.request('tools/call',{name,arguments:fixedArgs},{signal:abort.signal});
+          if(!Array.isArray(response?.content)||response.isError)throw Error('Downstream tool failed.');
+          return {value:response,summary:`MCP tool ${name} executed; output omitted from audit.`};
         }
       });
-      if (abort.signal.aborted) return;
-      if (checked.event.decision==='block') return write({jsonrpc:'2.0',id,result:toolFailure(`Denied: ${checked.event.ruleId}`)});
-      if (checked.event.outcome==='error') return write({jsonrpc:'2.0',id,result:toolFailure('Downstream MCP tool failed; see local audit.')});
-      return write({jsonrpc:'2.0',id,result:checked.result});
-    } catch { if (!abort.signal.aborted) write({jsonrpc:'2.0',id,result:toolFailure('Gateway unavailable; action not authorized.')}); }
-    finally { active.delete(id); }
+      if(abort.signal.aborted)return;
+      if(checked.event.decision==='block')return answer(id,toolFailure(`Denied: ${checked.event.ruleId}`));
+      if(checked.event.outcome==='error')return answer(id,toolFailure('Downstream MCP tool failed; see local audit.'));
+      return answer(id,checked.result);
+    }catch {if(!abort.signal.aborted)answer(id,toolFailure('MCP gateway unavailable; request not authorized.'));}
+    finally{active.delete(id);}
   }
+
   const unlisten=readJsonLines(input,{
     maxBytes:16384,
-    onMessage:message=>{
-      if (closed) return;
-      if (message.method==='notifications/initialized' && connected && !Object.hasOwn(message,'id')) {initialized=true;peer.notify('notifications/initialized');return;}
-      if (message.method==='notifications/cancelled' && !Object.hasOwn(message,'id')) {active.get(message.params?.requestId)?.abort();return;}
-      if (!Object.hasOwn(message,'id')) return;
-      if (typeof message.id!=='string' && typeof message.id!=='number') return;
-      if (typeof message.method!=='string') return write(fail(message.id,-32600,'Invalid MCP request.'));
-      dispatch(message).catch(()=>{try{write(fail(message.id,-32603,'Gateway internal failure.'));}catch{}});
+    onMessage:msg=>{
+      if(closed)return;
+      const hasId=Object.hasOwn(msg,'id');
+      if(msg.method==='notifications/cancelled' && !hasId){active.get(msg.params?.requestId)?.abort();return;}
+      if(msg.method==='notifications/initialized' && !hasId && era==='legacy'){initialized=true;return;}
+      if(!hasId || (typeof msg.id!=='string'&&typeof msg.id!=='number'))return;
+      if(typeof msg.method!=='string')return error(msg.id,-32600,'Invalid MCP request.');
+      dispatch(msg).catch(()=>{try{error(msg.id,-32603,'MCP internal failure.');}catch{}});
     },
     onError:()=>close()
   });
-  function close(){if(closed)return;closed=true;unlisten();for(const abort of active.values())abort.abort();peer.close();}
+  function close(){if(closed)return;closed=true;unlisten();for(const ctrl of active.values())ctrl.abort();peer.close();}
   input.on('end',close);
   process.once('SIGTERM',close);
   onReady?.({close,downstream,peer});
   return {close,downstream,peer};
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  startGateway().catch(error=>{console.error('MCP gateway failed to start:',error.message);process.exitCode=1;});
+if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+  startGateway().catch(err=>{console.error('MCP gateway failed to start:',err.message);process.exitCode=1;});
 }
