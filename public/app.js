@@ -40,6 +40,8 @@ async function refresh() {
   text($('nav-count'), stats.total);
   text($('audit-event-count'), `${stats.auditEvents} underlying audit events in current window`);
   text($('policy-count'), `${pol.policies.length} active`);
+  try { const v=await fetchJson('/api/audit/integrity'); text($('audit-integrity-label'),`Verified HMAC chain · ${v.records} records`); }
+  catch { text($('audit-integrity-label'),'INTEGRITY FAILURE'); }
   render();
 }
 function renderRecent() {

@@ -54,7 +54,14 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     const host = req.headers.host ?? '';
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) return sendJson(res, 403, { error: 'Local host required.' });
     const url = new URL(req.url ?? '/', `http://${host}`);
-    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.5.0', mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.6.0', mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/audit/integrity') {
+      try { const {ok,records,head}=store.verify();return sendJson(res,200,{ok,records,head,algorithm:'HMAC-SHA256'}); }
+      catch {return sendJson(res,503,{ok:false,error:'Audit integrity verification failed.'});}
+    }
+    if (req.method === 'GET' && ['/api/events','/api/activity','/api/stats'].includes(url.pathname)) {
+      try { store.verify(); } catch {return sendJson(res,503,{error:'Audit integrity verification failed; results withheld.'});}
+    }
     if (req.method === 'GET' && url.pathname === '/api/events') {
       return sendJson(res, 200, { events: store.list({ limit: url.searchParams.get('limit') ?? 300, decision: url.searchParams.get('decision'), runId: url.searchParams.get('runId') }) });
     }

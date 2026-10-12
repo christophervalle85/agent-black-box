@@ -23,3 +23,16 @@ jobs:
       # not a runtime dependency of the gateway. Pin a patched v2 release.
       - run: npm install --no-save --package-lock=false @modelcontextprotocol/client@2.3.1
       - run: npm run test:mcp-sdk
+  sandbox-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install official Bubblewrap package
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Legacy MCP through required sandbox (no fallback)
+        run: MCP_SANDBOX=required npm run mcp:smoke
+      - name: Modern MCP through required sandbox (no fallback)
+        run: MCP_SANDBOX=required npm run mcp:modern

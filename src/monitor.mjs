@@ -32,6 +32,9 @@ export function describeInput(tool, args) {
  */
 export async function guardedToolCall({ agentId, runId, tool, args, execute, store, workspaceRoot, source = 'integration', requestApproval, signal, recordStart = false }) {
   if (typeof execute !== 'function') throw new TypeError('An execution callback is required.');
+  // Audit integrity must be healthy before any trusted adapter can run.
+  // Never execute first and discover a broken log after the side effect.
+  store.verify();
   const policy = evaluatePolicy(tool, args, workspaceRoot);
   // A human approves these exact primitive values, not mutable model objects.
   const reviewedArgs = policy.decision === 'review' ? Object.freeze({ path: args.path, content: args.content }) : null;
