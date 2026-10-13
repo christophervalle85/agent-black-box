@@ -32,8 +32,8 @@ function fixture(callback,modify=()=>{}) {
   finally{rmSync(root,{force:true,recursive:true});}
 }
 const valid=(fixtureArgs)=>verifyMacDistributionSigner({
-  ...fixtureArgs,platform:'darwin',expectedTeamId:team,
-  hostIdentifier:hostId,serviceIdentifier:workerId
+  platform:'darwin',expectedTeamId:team,
+  hostIdentifier:hostId,serviceIdentifier:workerId,...fixtureArgs
 });
 test('explicit requirement pins Apple Developer ID issuer, leaf, bundle identity and quoted team',()=>{
   const req=developerIdRequirement(workerId,team);
