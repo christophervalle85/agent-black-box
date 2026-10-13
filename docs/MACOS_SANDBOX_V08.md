@@ -223,6 +223,22 @@ The separate `ServiceFailureBridgeHost.c` treats XPC connection interruptions/er
 
 **Scope:** This exercises one controlled service exit and relaunch in synthetic-only `MCP_SANDBOX=off`, not in-flight client cancellation, malicious process compromise, repeated crash-loop limits, independent Developer ID/Team ID signer attestation, complete filesystem/network denial on the final worker, or production macOS `MCP_SANDBOX=required`. No authentic audit data, user notes, signing keys or checkpoints are read or rewritten. The ordinary MCP gateway CLI and validated v0.7 `main` remain unchanged.
 
+### Phase 3E — Post-commit MCP cancellation and native-host process supervision (Mac acceptance pending)
+
+**Phase 3D PASSED on user's Apple Silicon Mac:** `npm run mcp:mac-xpc-service-failure` confirmed an actual sandboxed XPC service exited after committing/fsyncing a synthetic note but before replying; real MCP returned a fail-closed error; a subsequent XPC worker with a **different PID** recovered, the exact synthetic note survived, and fresh HMAC history recorded `MCP_OUTCOME_UNKNOWN` without note content. This was controlled service termination, not malicious compromise.
+
+Run the next **isolated** acceptance:
+
+```sh
+npm run mcp:mac-xpc-cancellation
+```
+
+The separately entitled `dev.agentblackbox.xpc-cancel.worker` is an otherwise ordinary fixed, synthetic-only XPC note worker, paired with a **different test-only** `CancellationBridgeHost.c` that intentionally pauses *after* XPC successfully replies to a newly created synthetic `bbx-test-cancel-after-*.txt` note but *before* it responds to its Node parent. The native test host emits **only its PID** through stderr as a synthetic synchronization marker; the Node test adapter writes this PID to a private `0600` marker within the disposable test directory, never the note bytes.
+
+The harness uses the **real MCP gateway, operator approval controller and fresh temporary HMAC audit**. It sends an approved legacy MCP write, waits for confirmed **post-commit/pre-acknowledgement** host pause, then sends `notifications/cancelled` for the exact active request ID. The gateway's `McpPeer` closes its downstream and sends SIGTERM. The synthetic-only adapter now **tracks spawned native hosts in separate POSIX process groups** and kills those groups when the adapter receives SIGTERM, SIGINT or exits. The test checks that the identified native host actually disappears, the XPC note already committed still exists with exact bytes, and the HMAC history contains **one** `MCP_OUTCOME_UNKNOWN` error without note bodies or false success. It also checks that the now-closed gateway downstream does **not** restart unsandboxed or accept a subsequent native request.
+
+This is a *partial, specifically scoped cancellation property*, **not** an assurance that a long-running XPC service operation is itself interrupted by killing its native host. The XPC worker has completed its write before this cancellation. Tests still needed: cancellation while native XPC service is executing, crash-loop/rate control, pending approvals, trusted signed host/service identities, final worker OS-denial checks, and production document import/export. The original native workers remain unchanged and `MCP_SANDBOX=required` still refuses macOS.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

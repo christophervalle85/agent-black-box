@@ -8,6 +8,7 @@
  * isolated acceptance harness. Never use this with MCP_SANDBOX=required.
  */
 import {spawn} from 'node:child_process';
+import {writeFileSync} from 'node:fs';
 import {readJsonLines,sendJsonLine} from '../src/mcp-wire.mjs';
 import {frameBridgeRequest,parseBridgeReply} from '../src/macos-xpc-bridge-wire.mjs';
 
@@ -23,6 +24,23 @@ const EXAMPLE_ERA='2025-11-25';
 const nativeTimeout=process.env.BLACKBOX_XPC_TEST_FAULT==='1'?2500:8500;
 let initialized=false;
 let ended=false;
+const nativeHosts=new Set();
+
+/** Process-group isolation limits a native host surviving parent shutdown. */
+function killNativeHost(child){
+  if(!child?.pid)return;
+  try{process.kill(-child.pid,'SIGKILL');}
+  catch{try{child.kill('SIGKILL');}catch{}}
+}
+function stopActiveNativeHosts(){
+  for(const child of nativeHosts)killNativeHost(child);
+}
+/** Called on the adapter's SIGTERM from the gateway's cancellation path. */
+export function installNativeHostSupervisor(){
+  process.once('SIGTERM',()=>{stopActiveNativeHosts();process.exit(143);});
+  process.once('SIGINT',()=>{stopActiveNativeHosts();process.exit(130);});
+  process.once('exit',stopActiveNativeHosts);
+}
 const send=(id,result)=>sendJsonLine(process.stdout,{jsonrpc:'2.0',id,result});
 const reject=(id,code,message)=>sendJsonLine(process.stdout,{jsonrpc:'2.0',id,error:{code,message}});
 const noDetails={isError:true,content:[{type:'text',text:'Native operation could not be completed safely.'}]};
@@ -34,10 +52,13 @@ export async function nativeRequest(executable,method,path,content='',{timeoutMs
   return new Promise((resolve,rejectPromise)=>{
     let data=Buffer.alloc(0);
     let settled=false,overflow=false,timedOut=false;
-    const child=spawn(executable,[],{shell:false,stdio:['pipe','pipe','pipe'],
+    const child=spawn(executable,[],{shell:false,detached:true,stdio:['pipe','pipe','pipe'],
       env:{PATH:'/usr/bin:/bin',HOME:process.env.HOME??'',TMPDIR:process.env.TMPDIR??'/tmp',
         LANG:'C.UTF-8',
         ...(process.env.BLACKBOX_XPC_TEST_FAULT==='1'?{BLACKBOX_XPC_TEST_FAULT:'1'}:{})}});
+    nativeHosts.add(child);
+    let stderrBuffer='',readyWritten=false;
+    const readyFile=process.env.BLACKBOX_XPC_CANCEL_READY_FILE;
     const finish=(err,answer)=>{
       if(settled)return;
       settled=true;
@@ -46,16 +67,27 @@ export async function nativeRequest(executable,method,path,content='',{timeoutMs
     };
     const timer=setTimeout(()=>{
       timedOut=true;
-      child.kill('SIGKILL');
+      killNativeHost(child);
     },timeoutMs);
     child.stdout.on('data',chunk=>{
       data=Buffer.concat([data,chunk]);
-      if(data.length>2500){overflow=true;child.kill('SIGKILL');}
+      if(data.length>2500){overflow=true;killNativeHost(child);}
     });
-    child.stderr.on('data',()=>{}); // diagnostics withheld; no contents in logs
+    child.stderr.on('data',chunk=>{
+      // Opt-in synthetic test signal: no note contents or sensitive data.
+      if(typeof readyFile!=='string'||!readyFile.startsWith('/')||readyWritten)return;
+      stderrBuffer=(stderrBuffer+chunk.toString('utf8')).slice(-200);
+      const marker=/BBX_CANCEL_COMMITTED_PID=([1-9][0-9]{0,9})\n/.exec(stderrBuffer);
+      if(!marker)return;
+      readyWritten=true;
+      if(Number(marker[1])!==child.pid){killNativeHost(child);return;}
+      try{writeFileSync(readyFile,marker[1]+'\n',{mode:0o600,flag:'wx'});}
+      catch{killNativeHost(child);}
+    });
     child.stdin.on('error',()=>{});
     child.on('error',err=>finish(Error('Native host launch failed.')));
     child.on('close',(status,signal)=>{
+      nativeHosts.delete(child);
       if(timedOut||overflow||status!==0||signal)
         return finish(Object.assign(
           Error('Native XPC result unavailable; write outcome may be unknown.'),
@@ -111,6 +143,7 @@ if(process.argv[1] && new URL('file://'+process.argv[1]).href===import.meta.url)
     console.error('Native MCP test downstream requires explicit macOS off-mode fixture and signed host.');
     process.exitCode=1;
   }else{
+    installNativeHostSupervisor();
     readJsonLines(process.stdin,{maxBytes:8192,onMessage:msg=>{
       Promise.resolve(dispatch(msg)).catch(()=>{});
     },onError:()=>{ended=true;process.exitCode=1;}});
