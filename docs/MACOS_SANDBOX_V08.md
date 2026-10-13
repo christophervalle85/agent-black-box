@@ -95,6 +95,22 @@ The harness builds and signs a disposable host `.app` and nested `.xpc`, checks 
 
 **Not yet the production worker:** the service currently accepts only a synthetic test operation, not `read_note` or `write_note`. The Node gateway still uses the bundled Node MCP notes executable, and `MCP_SANDBOX=required` on macOS remains unsupported/fail-closed. Only after native XPC acceptance do we design the bounded, authorization-checked Node→host→XPC request bridge, secure workspace provisioning, and real MCP read/write tests. Build-system and signing policy remain experimental; an Xcode project may be preferable to manual app packaging for shipping.
 
+## Phase 2a — bounded native note operations (experimental)
+
+**Previous gate on Mac PASSED:** The user ran `npm run mcp:mac-xpc-probe` and verified that the signed host app connected to a separately sandboxed native XPC service with a distinct process PID. A readable user-owned host marker and a reachable loopback TCP endpoint were both denied **with OS permission errors** from inside the worker; its temporary-file write/cleanup succeeded. This demonstrates real OS-enforced isolation of the diagnostic XPC service. It does not prove the complete MCP tool path.
+
+**Next on-device gate:** `npm run mcp:mac-xpc-notes` compiles/signs an **additional independent native XPC notes worker**, which exposes fixed `write_note` and `read_note` operations to the experimental host and a test-only `cleanup_test_note`. The test exchanges a hard-coded non-secret note, verifies identical bytes returned through XPC, attempts a traversal read, and cleans the synthetic file. The worker is signed with `com.apple.security.app-sandbox` and no network entitlements. The C implementation restricts names to `bbx-test-*.txt`, content to at most 2,000 bytes, and uses `openat` with `O_NOFOLLOW` and `O_EXCL` for new-file-only writes.
+
+**Strict limitation:** This deliberately operates only on synthetic files in the service's sandbox-accessible `TMPDIR`, **not** the project's demo workspace or durable notes. It has **no bridge to the Node MCP gateway**, no user approvals, no audit integration and no claim that the notes host is a complete MCP server. The earlier XPC OS isolation proof and existing Node policy/approval/audit checks remain separate. The test must pass on a real Mac before designing the Node-to-native IPC gateway or persistent workspace. No production credentials or existing audit records are needed. The native service is not yet hardened with client code-signature identity checks, and no other process should place sensitive content in this temporary test area.
+
+### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
+
+1. Complete native note XPC test using synthetic data.
+2. Design a durable, sandbox-contained workspace and explicit import/export workflow. Require the Node gateway's policy workspace to match the worker's actual data scope.
+3. Build a bounded MCP stdio/native host IPC adapter with fixed `initialize`, `tools/list`, and `tools/call` schemas, enforce message size limits, and deny direct worker access to audit keys and controller approval tokens.
+4. Exercise real MCP legacy/modern calls, read and operator-approved write, cancellations and worker crash / timeout; audit both successes and uncertain outcomes.
+5. Rerun permission-denial tests on the **final native notes worker**, reverify signatures and entitlements at launch, and reject any unsupported configuration without unsandboxed fallback. Retain Linux 7/7 isolation acceptance.
+
 ## Phase 2 — native XPC worker architecture (not yet implemented)
 
 - Build a dedicated sandboxed XPC service inside a minimal signed macOS host app, separated from the existing unsandboxed Node control plane. Model its IPC as a fixed set of `read_note`/`write_note` operations; never forward arbitrary tool names, paths, file descriptors or commands.

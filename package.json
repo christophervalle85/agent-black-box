@@ -27,7 +27,8 @@
     "mcp:mac-probe": "node examples/mcp-macos-probe.mjs",
     "mcp:mac-crash": "node examples/mcp-macos-crash.mjs",
     "mcp:mac-bundle-probe": "node examples/mcp-macos-probe.mjs --bundle",
-    "mcp:mac-xpc-probe": "node examples/mcp-macos-xpc-probe.mjs"
+    "mcp:mac-xpc-probe": "node examples/mcp-macos-xpc-probe.mjs",
+    "mcp:mac-xpc-notes": "node examples/mcp-macos-xpc-notes.mjs"
   },
   "license": "MIT"
 }
