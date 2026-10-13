@@ -24,7 +24,8 @@
     "anchor:receive": "node src/checkpoint-cli.mjs receive",
     "anchor:compare": "node src/checkpoint-cli.mjs compare",
     "anchor:ledger": "node src/checkpoint-cli.mjs ledger",
-    "mcp:mac-probe": "node examples/mcp-macos-probe.mjs"
+    "mcp:mac-probe": "node examples/mcp-macos-probe.mjs",
+    "mcp:mac-crash": "node examples/mcp-macos-crash.mjs"
   },
   "license": "MIT"
 }
