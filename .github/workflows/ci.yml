@@ -12,6 +12,8 @@ jobs:
         with:
           node-version: '22'
       - run: npm test
+      - run: node --check src/checkpoints.mjs
+      - run: node --check src/audit-journal.mjs
       - run: node --check examples/mcp-isolation-check.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest

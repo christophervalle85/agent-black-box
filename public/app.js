@@ -28,6 +28,17 @@ async function fetchJson(path, options) {
   return data;
 }
 async function refresh() {
+  try {
+    const response=await fetch('/api/audit/incidents');
+    const incident=await response.json();
+    text($('incident-status'),incident.actionable?('CRITICAL: '+incident.incidentCode):'None detected');
+    text($('incident-guidance'),incident.actionable?
+      'Audit evidence needs investigation. Protected tool execution is disabled; preserve records and do not reseal.':
+      (incident.externalCheckpoint==='verified'?'External checkpoint matches the local history.':'Local chain verified. Independent checkpoint comparison is not configured.'));
+    text($('audit-integrity-label'),incident.actionable?
+      ('CRITICAL: '+incident.incidentCode):
+      ('Verified HMAC chain · '+incident.records+' records · external '+incident.externalCheckpoint));
+  }catch{ text($('audit-integrity-label'),'Integrity status unavailable — investigate'); text($('incident-status'),'Unknown'); text($('incident-guidance'),'Incident reporting unavailable.'); }
   const [ev, stats, pol] = await Promise.all([
     fetchJson('/api/activity?limit=300'), fetchJson('/api/stats'), fetchJson('/api/policies')
   ]);
@@ -40,8 +51,6 @@ async function refresh() {
   text($('nav-count'), stats.total);
   text($('audit-event-count'), `${stats.auditEvents} underlying audit events in current window`);
   text($('policy-count'), `${pol.policies.length} active`);
-  try { const v=await fetchJson('/api/audit/integrity'); text($('audit-integrity-label'),`Verified HMAC chain · ${v.records} records`); }
-  catch { text($('audit-integrity-label'),'INTEGRITY FAILURE'); }
   render();
 }
 function renderRecent() {

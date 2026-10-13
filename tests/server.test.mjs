@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -17,6 +17,8 @@ test('local API serves stats and enforces same-origin POST', async () => {
   try {
     const health = await (await fetch(endpoint + '/api/health')).json();
     assert.equal(health.ok, true);
+    const packageVersion=JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+    assert.equal(health.version, packageVersion);
     const bad = await fetch(endpoint + '/api/demo/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(bad.status, 403);
     const accepted = await fetch(endpoint + '/api/demo/run', { method: 'POST', headers: { Origin: endpoint, 'Content-Type': 'application/json' }, body: '{}' });

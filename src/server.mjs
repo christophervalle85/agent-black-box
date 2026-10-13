@@ -11,6 +11,7 @@ import { createOllamaClient, runAgent } from './agent.mjs';
 import { ApprovalQueue } from './approvals.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const appVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const publicFiles = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
@@ -54,7 +55,21 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     const host = req.headers.host ?? '';
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) return sendJson(res, 403, { error: 'Local host required.' });
     const url = new URL(req.url ?? '/', `http://${host}`);
-    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.6.0', mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: appVersion, mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/audit/incidents') {
+      try {
+        const current=store.verify();
+        return sendJson(res,200,{state:'verified',severity:'none',records:current.records,
+          externalCheckpoint:store.externalReceiptFile?'verified':'not-configured',
+          actionable:false,message:'Authenticated audit chain verified.'});
+      }catch(error){
+        const recovery=/RECOVERY REQUIRED/i.test(error.message);
+        const external=/CHECKPOINT (ROLLBACK|FORK)|identity|signing key|signature/i.test(error.message);
+        return sendJson(res,503,{state:'blocked',severity:'critical',actionable:true,
+          incidentCode:recovery?'RECOVERY_REQUIRED':external?'EXTERNAL_CHECKPOINT_MISMATCH':'AUDIT_INTEGRITY_FAILURE',
+          message:'Protected operations are blocked. Preserve audit artifacts and investigate; never reseal.'});
+      }
+    }
     if (req.method === 'GET' && url.pathname === '/api/audit/integrity') {
       try { const {ok,records,head}=store.verify();return sendJson(res,200,{ok,records,head,algorithm:'HMAC-SHA256'}); }
       catch {return sendJson(res,503,{ok:false,error:'Audit integrity verification failed.'});}
@@ -232,6 +247,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const { server } = createBlackBoxServer();
   const port = Number(process.env.PORT ?? '4317');
   server.listen(port, '127.0.0.1', () => {
-    console.log(`\n  AGENT BLACK BOX  v0.5\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
+    console.log(`\n  AGENT BLACK BOX  v${appVersion}\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
   });
 }

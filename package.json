@@ -1,6 +1,6 @@
 {
   "name": "agent-black-box",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Local AI agent with enforced tool policies, pre-execution auditing and a live security dashboard",
   "type": "module",
@@ -19,7 +19,11 @@
     "mcp:modern": "node examples/mcp-modern-smoke.mjs",
     "audit:verify": "node src/audit-cli.mjs verify",
     "audit:seal": "node src/audit-cli.mjs seal",
-    "mcp:isolation": "node examples/mcp-isolation-check.mjs"
+    "mcp:isolation": "node examples/mcp-isolation-check.mjs",
+    "anchor:export": "node src/checkpoint-cli.mjs export",
+    "anchor:receive": "node src/checkpoint-cli.mjs receive",
+    "anchor:compare": "node src/checkpoint-cli.mjs compare",
+    "anchor:ledger": "node src/checkpoint-cli.mjs ledger"
   },
   "license": "MIT"
 }
