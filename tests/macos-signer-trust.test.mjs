@@ -95,7 +95,7 @@ test('codesign verification error cannot be converted into a trusted display res
 test('metadata mismatch in a signed-looking bundle fails after explicit requirement checks',()=>fixture(f=>{
   assert.throws(()=>valid({...f,run:(cmd,args,options)=>{
     const result=f.run(cmd,args,options);
-    if(args.includes('--display')&&!args.includes('--entitlements')&&args.at(-1)===f.service)
+    if(args.includes('--display')&&!args.includes('--entitlements')&&args.at(-1)===f.canonicalService)
       result.stderr=display(hostId);
     return result;
   }}),/mismatch/);
