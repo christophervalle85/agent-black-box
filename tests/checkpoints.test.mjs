@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { AuditStore } from '../src/audit.mjs';
 import { exportReceipt, receiveReceipt, compareReceipt, readLedger, validateReceipt } from '../src/checkpoints.mjs';
 
@@ -64,4 +64,29 @@ test('missing signing identity and tampered ledger fail closed',()=>fixture(({fi
   const data=readFileSync(ledger,'utf8');
   writeFileSync(ledger,data.replace('"seq":1','"seq":7'));
   assert.throws(()=>readLedger(ledger),/signature/);
+}));
+
+test('external checkpoint mismatch blocks guarded operations before execution',async()=>fixture(async({file})=>{
+  const {guardedToolCall}=await import('../src/monitor.mjs');
+  const local=new AuditStore(file);
+  local.add(event('first'));
+  const trusted=exportReceipt(local);
+  const external=file+'.independent-receipt.json';
+  writeFileSync(external,JSON.stringify(trusted)+'\\n');
+  const guarded=new AuditStore(file,{externalReceiptFile:external});
+  const forgedRaw=JSON.stringify(event('rewritten'));
+  const key=local.keyUnsafe(),prev='0'.repeat(64);
+  const mac=actualHmac('sha256',key).update(JSON.stringify({version:1,seq:1,prev,raw:forgedRaw}), 'utf8').digest('hex');
+  writeFileSync(file,forgedRaw+'\\n');
+  writeFileSync(local.macFile,JSON.stringify({seq:1,prev,mac})+'\\n');
+  writeFileSync(local.anchorFile,JSON.stringify({seq:1,mac})+'\\n');
+  assert.equal(local.verify().ok,true);
+  assert.throws(()=>new AuditStore(file,{externalReceiptFile:external}),/CHECKPOINT FORK/);
+  let executed=false;
+  await assert.rejects(()=>guardedToolCall({
+    agentId:'adversary',runId:'rollback',tool:'file.read',args:{path:'notes.txt'},
+    store:guarded,workspaceRoot:dirname(file),
+    execute:async()=>{executed=true;return {value:'unsafe'};}
+  }),/CHECKPOINT FORK/);
+  assert.equal(executed,false);
 }));

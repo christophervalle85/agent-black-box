@@ -1,8 +1,8 @@
-# Agent Black Box · v0.6
+# Agent Black Box · v0.7
 
-**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 added a real local MCP stdio gateway; v0.5 added dual-era protocol support and harder cancellation semantics; **v0.6 adds optional Linux Bubblewrap process isolation and tamper-evident HMAC audit verification****, forwarding permitted calls to a separate downstream MCP notes server.
+**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 added a real local MCP stdio gateway; v0.5 added dual-era protocol support and harder cancellation semantics; **v0.6 added Linux Bubblewrap isolation and tamper-evident HMAC audit verification; v0.7 adds independent checkpoint receipts, crash recovery and incident monitoring**, forwarding permitted calls to a separate downstream MCP notes server.
 
-![Status](https://img.shields.io/badge/MVP-v0.6-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
+![Status](https://img.shields.io/badge/MVP-v0.7-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
 ## Quick start
 
@@ -37,6 +37,35 @@ OLLAMA_MODEL=qwen3:8b npm start # pull that model first
 ```
 
 No cloud API key or npm dependency installation is required. The model download is a few gigabytes and needs sufficient memory. Data persists to the gitignored `data/audit.jsonl` file; Ctrl+C stops the server.
+
+## v0.7: Independently verifiable evidence and crash recovery
+
+See the [v0.7 audit trust and recovery operations guide](docs/AUDIT_TRUST.md) for the official NIST/OWASP/Node.js references, trust model and recovery limits.
+
+On your Mac, continue using the existing sealed v0.6 audit history without resealing:
+
+```bash
+npm run audit:verify
+npm test
+npm run --silent anchor:export > checkpoint.json
+```
+
+Transfer **only `checkpoint.json`** to your Ubuntu VM, then accept it there:
+
+```bash
+cat checkpoint.json | npm run anchor:receive -- --ledger "$HOME/blackbox-external-evidence/receipts.jsonl"
+npm run anchor:ledger -- --ledger "$HOME/blackbox-external-evidence/receipts.jsonl"
+```
+
+Save a copy of the **previously accepted** checkpoint in independent custody; transfer it back for comparison:
+
+```bash
+npm run anchor:compare -- --receipt previously-accepted-checkpoint.json
+```
+
+The receiver verifies a portable Ed25519 signature without receiving raw audit events or HMAC secrets, and pins the signing identity on first acceptance. It rejects older sequences, same-sequence forks and key substitutions. It is intentionally an offline/manual test workflow, **not a remote immutable service**. The VM is not a fully independent physical security domain because it runs on your Mac. A compromised Mac signing key can forge *future* receipts; a prior checkpoint preserved outside the compromised account enables historical comparison.
+
+Audit writes now use an authenticated pending journal. A restart can repair only an exact interrupted write; unrelated corruption still blocks protected operations. The Protection status panel and `GET /api/audit/incidents` expose integrity incidents while the local server is running.
 
 ## v0.6: OS sandboxing and tamper-evident audit logs
 

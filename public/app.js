@@ -31,10 +31,14 @@ async function refresh() {
   try {
     const response=await fetch('/api/audit/incidents');
     const incident=await response.json();
+    text($('incident-status'),incident.actionable?('CRITICAL: '+incident.incidentCode):'None detected');
+    text($('incident-guidance'),incident.actionable?
+      'Audit evidence needs investigation. Protected tool execution is disabled; preserve records and do not reseal.':
+      (incident.externalCheckpoint==='verified'?'External checkpoint matches the local history.':'Local chain verified. Independent checkpoint comparison is not configured.'));
     text($('audit-integrity-label'),incident.actionable?
       ('CRITICAL: '+incident.incidentCode):
       ('Verified HMAC chain · '+incident.records+' records · external '+incident.externalCheckpoint));
-  }catch{ text($('audit-integrity-label'),'Integrity status unavailable — investigate'); }
+  }catch{ text($('audit-integrity-label'),'Integrity status unavailable — investigate'); text($('incident-status'),'Unknown'); text($('incident-guidance'),'Incident reporting unavailable.'); }
   const [ev, stats, pol] = await Promise.all([
     fetchJson('/api/activity?limit=300'), fetchJson('/api/stats'), fetchJson('/api/policies')
   ]);

@@ -17,7 +17,7 @@ On Mac:
 
 ```sh
 npm run audit:verify
-npm run anchor:export > checkpoint.json
+npm run --silent anchor:export > checkpoint.json
 # Transfer ONLY checkpoint.json to Ubuntu VM via reviewed clipboard / trusted transfer.
 ```
 
