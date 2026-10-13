@@ -113,6 +113,24 @@ The native worker still accepts only `bbx-test-*.txt` filenames (≤64 character
 
 **Important:** This is NOT a production MCP downstream, not durable notes storage, and not connected to `src/mcp-gateway.mjs`. This smoke deliberately bypasses human approvals and audit logs **because it can access only expendable synthetic test fixtures**; it must not be repurposed for real files. Before routing user-controlled operations, we need to align policy and XPC workspace identity, use a native durable container directory, constrain client identity/signature and executable trust, enforce operator approval and authenticated audit logging, handle XPC request cancellation and uncertain write outcomes, and replay both OS-denial tests on the final service. A synchronous XPC response can block indefinitely according to [Apple's API documentation](https://developer.apple.com/documentation/xpc/xpc_connection_send_message_with_reply_sync%28_%3A_%3A%29); the test's Node process supervisor imposes a timeout and treats a timed-out write as an **unknown outcome**, not a rollback. macOS `MCP_SANDBOX=required` must remain fail-closed.
 
+### Phase 2C — Container-owned durable scratch storage (Mac acceptance pending)
+
+The user ran the **Phase 2B transport acceptance on Apple Silicon** and verified every synthetic Node→native host→XPC operation: signed worker, exclusive new-file creation, exact readback, traversal and duplicate-write refusal, original note unchanged, deletion and post-deletion denial. This proves the *experimental transport only*, not MCP policy integration or real document storage.
+
+The next isolated gate runs:
+
+```sh
+npm run mcp:mac-xpc-durable
+```
+
+It compiles a **separate** Objective-C/C native XPC service (`dev.agentblackbox.xpc-durable.worker`) without changing the previously accepted temporary-file service. Using Foundation's documented `NSFileManager URLForDirectory:NSDocumentDirectory ... create:YES`, the service requests its own sandbox-managed Documents directory. It refuses the operation unless this resolves into macOS's expected `/Library/Containers/.../Data/Documents` path shape. It creates a `0700` `AgentBlackBoxScratchNotes` subfolder, rejects symlinked/non-owner/world-accessible directories, and continues to use `openat`, `O_NOFOLLOW`, `O_EXCL`, `0600` and synthetic `bbx-test-*.txt` filenames. This path is never supplied by the MCP client or Node.
+
+A first signed host process creates/reads a synthetic note and exits. A **separate native host invocation** then tries to read the same bytes, denies a duplicate write and a traversal, confirms no mutation, removes the note and rejects a post-delete read. Because `launchd` can reuse an XPC service process, this test proves continuity *across client invocations*, **not** that the worker itself restarted; an explicit worker restart acceptance must be added later. On completion the signed temporary `.app` is deleted, but macOS may retain the application sandbox's scratch directory after the test. The note is removed on the success path; a killed test can leave a harmless synthetic file in the sandbox. Never delete unrelated container data automatically.
+
+This is a deliberate **workspace authority gate**, not a workaround using App Groups or wider disk access. Apple recommends standard Documents paths inside an app's container ([Protecting user data with App Sandbox](https://developer.apple.com/documentation/security/protecting-user-data-with-app-sandbox), [Files and directories](https://developer.apple.com/documentation/technologyoverviews/files-and-directories)). Sharing a container with an unsandboxed Node process via Apple App Groups requires separately supported signing/entitlement and potentially notarization/provisioning ([Accessing files from the macOS App Sandbox](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox)). This experiment **does not grant** that access.
+
+**Remaining gaps:** the real `MCP_WORKSPACE_ROOT` and signed worker's storage scope are intentionally different; we must define their matching policy and explicit data import/export, user approvals, signed-binary identity checks, audit records, cancellation/uncertain-write semantics, and final-worker file/network OS-denial tests. The Node gateway is unchanged; macOS `MCP_SANDBOX=required` continues fail-closed.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.
