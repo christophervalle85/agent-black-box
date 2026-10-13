@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
@@ -17,18 +17,22 @@ function fixture(callback,modify=()=>{}) {
   const app=join(root,'Host.app');
   const service=join(app,'Contents','XPCServices','Worker.xpc');
   mkdirSync(service,{recursive:true});
+  // macOS often aliases /var to /private/var. Production verification uses
+  // realpathSync; mocked codesign must recognize those canonical paths too.
+  const canonicalApp=realpathSync(app);
+  const canonicalService=realpathSync(service);
   const calls=[];
   function run(cmd,args,options){
     calls.push({cmd,args,options});
     const path=args.at(-1);
     let text='';
     if(args.includes('--entitlements'))text=plist;
-    else if(args.includes('--display'))text=display(path===app?hostId:workerId);
+    else if(args.includes('--display'))text=display(path===canonicalApp?hostId:workerId);
     const response={status:0,stdout:'',stderr:text};
-    modify({cmd,args,path,app,service,response});
+    modify({cmd,args,path,app:canonicalApp,service:canonicalService,response});
     return response;
   }
-  try{return callback({app,service,run,calls});}
+  try{return callback({app,service,canonicalApp,canonicalService,run,calls});}
   finally{rmSync(root,{force:true,recursive:true});}
 }
 const valid=(fixtureArgs)=>verifyMacDistributionSigner({
@@ -52,6 +56,9 @@ test('only explicitly matching Developer ID and sandbox-only XPC worker can be a
   assert.ok(req[0].args.join(' ').includes(hostId));
   assert.ok(req[1].args.join(' ').includes(workerId));
   assert.ok(f.calls.some(x=>x.args.includes('--deep')));
+  // These are resolved native bundle paths even when tmpdir() uses /var.
+  assert.ok(f.calls.some(x=>x.args.at(-1)===f.canonicalApp));
+  assert.ok(f.calls.some(x=>x.args.at(-1)===f.canonicalService));
   assert.equal(f.calls.length,6);
 }));
 test('platform, identity, path and missing independently pinned Team ID all fail closed',()=>fixture(f=>{
