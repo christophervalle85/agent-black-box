@@ -98,6 +98,13 @@ int main(void){
          * host relies on Node's external kill deadline. A timed-out write
          * is an UNKNOWN outcome, not a safe rollback.
          */
+        // Synthetic-only host PID marker BEFORE XPC dispatch. A separate
+        // worker-owned marker proves the request actually entered the service.
+        if(writeOp && strncmp(name,"bbx-test-cancel-during-",
+                              sizeof("bbx-test-cancel-during-")-1)==0) {
+            fprintf(stderr,"BBX_CANCEL_STARTED_PID=%ld\n",(long)getpid());
+            fflush(stderr);
+        }
         xpc_object_t reply=xpc_connection_send_message_with_reply_sync(connection,request);
         xpc_release(request);
         /*

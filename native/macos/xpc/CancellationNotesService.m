@@ -15,6 +15,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <ctype.h>
 #include <limits.h>
@@ -133,9 +134,74 @@ finish:
     xpc_connection_send_message(peer,response);
     xpc_release(response);
 }
+/*
+ * EXPERIMENTAL IN-FLIGHT CANCELLATION ONLY:
+ * A write named bbx-test-cancel-during-*.txt runs on a background queue,
+ * allowing the XPC peer invalidation event to be processed independently.
+ * The service creates a private, content-free synthetic marker inside its
+ * own Documents scratch directory only after it begins executing the work.
+ * This is NOT a production transaction or cancellation protocol.
+ */
+static bool delayed_name(const char *name) {
+    return allowed_name(name) &&
+      strncmp(name,"bbx-test-cancel-during-",
+              sizeof("bbx-test-cancel-during-")-1)==0;
+}
+static void delayed_message(xpc_connection_t peer,xpc_object_t incoming,
+                            atomic_bool *peer_closed) {
+    @autoreleasepool {
+        const char *name=xpc_dictionary_get_string(incoming,"path");
+        char marker[80]={0};
+        int dir=-1;
+        if(!name || !delayed_name(name) ||
+           snprintf(marker,sizeof(marker),"bbx-test-cancel-running-%s",
+                    name+sizeof("bbx-test-cancel-during-")-1) >= (int)sizeof(marker))
+            goto end;
+        dir=notes_fd();
+        if(dir<0)goto end;
+        int fd=openat(dir,marker,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+        if(fd<0)goto end;
+        const char started[]="worker-running\n";
+        bool marked=write(fd,started,sizeof(started)-1)==(ssize_t)sizeof(started)-1
+                    && fsync(fd)==0;
+        if(close(fd)!=0)marked=false;
+        if(!marked){unlinkat(dir,marker,0);goto end;}
+        /* Bounded 4-second synthetic execution window, never arbitrary work. */
+        for(unsigned i=0;i<160 && !atomic_load(peer_closed);i++)
+            usleep(25000);
+        /* A kill of the host closes its XPC peer. This test worker detects
+         * invalidation while a separate queue is executing. If the write
+         * races invalidation at this check, the gateway still audits UNKNOWN.
+         */
+        if(!atomic_load(peer_closed))message(peer,incoming);
+        unlinkat(dir,marker,0);
+end:
+        if(dir>=0)close(dir);
+        xpc_release(incoming);
+        xpc_release(peer);
+    }
+}
 static void accept_peer(xpc_connection_t peer) {
+    // Tiny test-only per-connection cancellation latch. The disposable XPC
+    // worker is short-lived; never copy this allocation model to production.
+    atomic_bool *peer_closed=calloc(1,sizeof(*peer_closed));
+    if(!peer_closed){xpc_connection_cancel(peer);return;}
+    atomic_init(peer_closed,false);
     xpc_connection_set_event_handler(peer,^(xpc_object_t event) {
-        if(xpc_get_type(event)==XPC_TYPE_DICTIONARY)message(peer,event);
+        if(xpc_get_type(event)==XPC_TYPE_DICTIONARY) {
+            const char *method=xpc_dictionary_get_string(event,"method");
+            const char *name=xpc_dictionary_get_string(event,"path");
+            if(method && strcmp(method,"write_note")==0 &&
+               delayed_name(name)) {
+                xpc_retain(peer);
+                xpc_retain(event);
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT,0), ^{
+                    delayed_message(peer,event,peer_closed);
+                });
+            }else message(peer,event);
+        }else if(event==XPC_ERROR_CONNECTION_INVALID) {
+            atomic_store(peer_closed,true);
+        }
     });
     xpc_connection_resume(peer);
 }

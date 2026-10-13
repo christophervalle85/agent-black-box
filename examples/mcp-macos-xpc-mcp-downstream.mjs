@@ -77,7 +77,7 @@ export async function nativeRequest(executable,method,path,content='',{timeoutMs
       // Opt-in synthetic test signal: no note contents or sensitive data.
       if(typeof readyFile!=='string'||!readyFile.startsWith('/')||readyWritten)return;
       stderrBuffer=(stderrBuffer+chunk.toString('utf8')).slice(-200);
-      const marker=/BBX_CANCEL_COMMITTED_PID=([1-9][0-9]{0,9})\n/.exec(stderrBuffer);
+      const marker=/BBX_CANCEL_(?:COMMITTED|STARTED)_PID=([1-9][0-9]{0,9})\n/.exec(stderrBuffer);
       if(!marker)return;
       readyWritten=true;
       if(Number(marker[1])!==child.pid){killNativeHost(child);return;}

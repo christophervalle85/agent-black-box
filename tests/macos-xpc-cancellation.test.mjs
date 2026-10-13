@@ -52,3 +52,21 @@ test('end-to-end cancellation gate checks post-commit note, process exit, HMAC a
  assert.match(wire,/this\.close\(new Error\('Downstream cancelled/);
  assert.match(monitor,/MCP_OUTCOME_UNKNOWN/);
 });
+
+test('synthetic mid-execution cancellation can invalidate XPC peer while background work is active',()=>{
+  const worker=file('../native/macos/xpc/CancellationNotesService.m');
+  const host=file('../native/macos/xpc/CancellationBridgeHost.c');
+  const adapter=file('../examples/mcp-macos-xpc-mcp-downstream.mjs');
+  const ordinary=file('../native/macos/xpc/AuthorityNotesService.m');
+  assert.match(worker,/bbx-test-cancel-during-/);
+  assert.match(worker,/bbx-test-cancel-running-/);
+  assert.match(worker,/worker-running/);
+  assert.match(worker,/dispatch_async\(dispatch_get_global_queue/);
+  assert.match(worker,/event==XPC_ERROR_CONNECTION_INVALID/);
+  assert.match(worker,/atomic_load\(peer_closed\)/);
+  assert.match(worker,/atomic_store\(peer_closed,true\)/);
+  assert.match(worker,/O_EXCL\|O_NOFOLLOW\|O_CLOEXEC/);
+  assert.match(host,/BBX_CANCEL_STARTED_PID/);
+  assert.match(adapter,/COMMITTED\|STARTED/);
+  assert.doesNotMatch(ordinary,/bbx-test-cancel-during-|worker-running/);
+});
