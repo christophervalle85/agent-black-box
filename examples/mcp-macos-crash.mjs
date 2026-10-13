@@ -12,7 +12,7 @@ const limited=(value,max=300)=>typeof value==='string'?value.slice(0,max):'';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const compact=value=>{
   if (typeof value==='string') return value.slice(0,500);
-  if (object(value)) return JSON.stringify(value).slice(0,500);
+  if (object(value) || Array.isArray(value)) return JSON.stringify(value).slice(0,500);
   return null;
 };
 export function summarizeProbeCrash(source) {
