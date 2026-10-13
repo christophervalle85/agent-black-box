@@ -25,6 +25,7 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-mcp-acceptance.mjs
       - run: node --check examples/mcp-macos-xpc-mcp-downstream.mjs
       - run: node --check examples/mcp-macos-xpc-fault-acceptance.mjs
+      - run: node --check examples/mcp-macos-xpc-service-failure.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

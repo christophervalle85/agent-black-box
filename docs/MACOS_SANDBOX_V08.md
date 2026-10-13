@@ -207,6 +207,22 @@ The test then reads the crash-committed synthetic note via the normal native hos
 
 **Scope and exclusions:** This is native **host** termination/hang injection, not an actual XPC **service** crash or a cancellation-after-dispatch guarantee. We still need a safe service-crash/lifecycle test, cancellation propagation down to the host process, independent Developer ID/Team ID verification and service identity, final-worker denied file/network regressions, user-workspace data flow, and complete Mac required-mode acceptance. `MCP_SANDBOX=required` on macOS still refuses execution, and v0.7 `main` is unchanged.
 
+### Phase 3D — XPC SERVICE abrupt termination after a committed synthetic write (Mac acceptance pending)
+
+**Phase 3C on-device passed:** `npm run mcp:mac-xpc-faults` demonstrated that a native **host** hanging before a write leaves no note, while a native host dying **after XPC committed** leaves the synthetic note present. Both outward MCP responses were errors, and the freshly verified HMAC audit contained two `MCP_OUTCOME_UNKNOWN` outcomes without the note bodies. A subsequent native MCP read succeeded. This result is host-failure acceptance, **not** actual XPC service lifecycle acceptance.
+
+**Next acceptance command** on an Apple Silicon Mac with Xcode:
+
+```sh
+npm run mcp:mac-xpc-service-failure
+```
+
+The test signs a **separate disposable XPC worker**, `dev.agentblackbox.xpc-servicefault.worker`, with App Sandbox enabled and no network entitlement. Its source `ServiceFailureNotesService.m` is copied from the already validated worker but has one deliberately dangerous **test-only** hook: after `openat(O_CREAT|O_EXCL|O_NOFOLLOW,0600)`, writing and `fsync(file)` of a synthetic `bbx-test-xpc-crash-*.txt` file, the **XPC service process itself** calls `_exit(86)` *before its XPC reply*. This is a controlled **abrupt service exit**, not evidence of an attacker exploit, a full process crash dump or a simulated power-loss durability guarantee. The original `AuthorityNotesService.m` is unchanged.
+
+The separate `ServiceFailureBridgeHost.c` treats XPC connection interruptions/errors as a nonzero native-host exit rather than an ordinary application-level `ERR 0`. Node's synthetic test adapter therefore propagates loss of write acknowledgement up through the actual MCP gateway, and the monitor must record `MCP_OUTCOME_UNKNOWN` in a **fresh disposable HMAC audit chain**. The test requires: an outward MCP error after a real human-approved synthetic write, the exact committed note visible afterwards, a different XPC **worker PID** responding after the abrupt exit, the authenticated audit's single uncertain-write record without note content, and successful readback through the recovered native MCP path. The note is deleted through the test host in `finally`; interrupted tests may leave harmless `bbx-test-*` scratch notes in the dedicated worker container.
+
+**Scope:** This exercises one controlled service exit and relaunch in synthetic-only `MCP_SANDBOX=off`, not in-flight client cancellation, malicious process compromise, repeated crash-loop limits, independent Developer ID/Team ID signer attestation, complete filesystem/network denial on the final worker, or production macOS `MCP_SANDBOX=required`. No authentic audit data, user notes, signing keys or checkpoints are read or rewritten. The ordinary MCP gateway CLI and validated v0.7 `main` remain unchanged.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.
