@@ -1,12 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,rmSync,symlinkSync,chmodSync,readFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,symlinkSync,chmodSync,readFileSync,realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {validateMacWorkspaceBinding} from '../src/macos-workspace-binding.mjs';
 
 function fixture(run) {
- const base=mkdtempSync(join(tmpdir(),'bb-mac-authority-'));
+ const base=realpathSync(mkdtempSync(join(tmpdir(),'bb-mac-authority-')));
  try {
   const root=join(base,'Library','Containers','dev.agentblackbox.xpc-authority.worker',
     'Data','Documents','AgentBlackBoxScratchNotes');
