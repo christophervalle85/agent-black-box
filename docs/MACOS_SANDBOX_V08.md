@@ -131,6 +131,26 @@ This is a deliberate **workspace authority gate**, not a workaround using App Gr
 
 **Remaining gaps:** the real `MCP_WORKSPACE_ROOT` and signed worker's storage scope are intentionally different; we must define their matching policy and explicit data import/export, user approvals, signed-binary identity checks, audit records, cancellation/uncertain-write semantics, and final-worker file/network OS-denial tests. The Node gateway is unchanged; macOS `MCP_SANDBOX=required` continues fail-closed.
 
+### Phase 2D — Native XPC workspace identity and fail-closed policy root comparison
+
+**Phase 2C on-device passed**: the user ran `npm run mcp:mac-xpc-durable` and confirmed sandbox Documents note persistence across **two separate host invocations**, exclusive creation, traversal and overwrite refusal, unchanged content after denials, deletion and post-deletion denial. It did **not** prove a native XPC service restart, MCP policy or audit controls.
+
+Next diagnostic gate, **not a production MCP configuration**:
+
+```sh
+npm run mcp:mac-xpc-authority
+```
+
+This builds an **independent** `dev.agentblackbox.xpc-authority.worker` service with the same signed App Sandbox restrictions and Documents scratch storage. A fixed `workspace_info` XPC method obtains the opened notes directory with macOS `fcntl(F_GETPATH)`. Its native host supports a special bounded `ROOT - 0` protocol frame and never uses a client-supplied filesystem path to select the worker's root. Node receives the path **in memory**, then applies `validateMacWorkspaceBinding`:
+
+- refuse a distinct or unspecified `MCP_WORKSPACE_ROOT`; do not silently map the gateway's `demo-workspace` into the worker's container
+- require canonical absolute container-owned `Data/Documents/AgentBlackBoxScratchNotes` and a private same-owner directory
+- reject symlinked or group/world-accessible directory roots
+
+The acceptance script first proves that the existing demo workspace cannot bind to native storage, then proves that an explicitly equal **synthetic test policy root** passes. Finally it reruns the native two-host persistence and denial tests. This is a workspace **comparison**, not cryptographic attestation of the worker: the actual signed native app must be verified before trusting its reported root, and same-user attackers are outside this prototype's trust assumptions. A production integration must require an independent, explicitly configured root, not accept a path simply because a worker reports it.
+
+**Gateway remains unchanged:** no real MCP tool routing, durable user document ingestion, operator approval or authenticated audit. `MCP_SANDBOX=required` continues to refuse execution on macOS. The private worker is test-only and named `bbx-test-*.txt`; the Node policy currently permits a broader set of paths, so those grammars also need harmonization before enabling actual MCP calls.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

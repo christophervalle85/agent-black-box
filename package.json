@@ -30,7 +30,8 @@
     "mcp:mac-xpc-probe": "node examples/mcp-macos-xpc-probe.mjs",
     "mcp:mac-xpc-notes": "node examples/mcp-macos-xpc-notes.mjs",
     "mcp:mac-xpc-node-bridge": "node examples/mcp-macos-xpc-node-bridge.mjs",
-    "mcp:mac-xpc-durable": "node examples/mcp-macos-xpc-durable.mjs"
+    "mcp:mac-xpc-durable": "node examples/mcp-macos-xpc-durable.mjs",
+    "mcp:mac-xpc-authority": "node examples/mcp-macos-xpc-authority.mjs"
   },
   "license": "MIT"
 }
