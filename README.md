@@ -1,8 +1,8 @@
-# Agent Black Box · v0.5
+# Agent Black Box · v0.6
 
-**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 added a real local MCP stdio gateway; v0.5 adds dual-era protocol support and harder cancellation semantics**, forwarding permitted calls to a separate downstream MCP notes server.
+**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 added a real local MCP stdio gateway; v0.5 added dual-era protocol support and harder cancellation semantics; **v0.6 adds optional Linux Bubblewrap process isolation and tamper-evident HMAC audit verification****, forwarding permitted calls to a separate downstream MCP notes server.
 
-![Status](https://img.shields.io/badge/MVP-v0.5-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
+![Status](https://img.shields.io/badge/MVP-v0.6-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
 ## Quick start
 
@@ -37,6 +37,28 @@ OLLAMA_MODEL=qwen3:8b npm start # pull that model first
 ```
 
 No cloud API key or npm dependency installation is required. The model download is a few gigabytes and needs sufficient memory. Data persists to the gitignored `data/audit.jsonl` file; Ctrl+C stops the server.
+
+## v0.6: OS sandboxing and tamper-evident audit logs
+
+See the [OS sandboxing and audit integrity operator guide](docs/SANDBOX_AUDIT.md), grounded in the official Bubblewrap manual, Apple App Sandbox, NIST HMAC specification and OWASP logging guidance.
+
+**macOS (including Apple Silicon):** An ordinary Node subprocess is **not** covered by Apple's signed App Sandbox. `MCP_SANDBOX=required` therefore refuses to run; the default local demo remains `off`. Linux users can opt into strict namespace sandboxing with Bubblewrap; failure never silently downgrades. GitHub-hosted Linux currently restricts network-namespace setup; CI therefore verifies controlled fail-closed behavior there, and sandboxed execution still requires validation on a compatible Linux host.
+
+```bash
+# Upgrade from v0.5 if data/audit.jsonl is nonempty (one-time, preserves old bytes):
+npm run audit:seal
+npm run audit:verify
+
+# Always available after sealing:
+npm test
+npm start
+npm run mcp:smoke
+
+# Linux only, after installing Bubblewrap:
+MCP_SANDBOX=required npm run mcp:smoke
+```
+
+`GET /api/audit/integrity` verifies the chained HMAC-SHA256 signatures and their checkpoint. The original JSONL format is preserved. **A local attacker who can read or replace the signing key is outside this prototype's threat model**; a separate signed checkpoint/export is needed for independent audit assurance.
 
 ## v0.5: Interoperability and gateway hardening
 
@@ -125,6 +147,7 @@ The model sees friendly function names (`read_file`, `fetch_docs`, `run_shell`),
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/health` | Service health and version |
+| `GET /api/audit/integrity` | Verify HMAC chain + checkpoint (503 on failure) |
 | `GET /api/agent/status` | Ollama connectivity and configured model availability |
 | `POST /api/agent/run` | Execute one model-driven task and return answer + audit records |
 | `GET /api/events?limit=300&decision=block` | Original append-only audit events (raw, ungrouped) |
@@ -147,7 +170,7 @@ src/server.mjs         Local HTTP API, static assets, SSE
 src/policy.mjs         Deterministic tool approval/denial rules
 src/monitor.mjs        Pre-execution wrapper and redacted audit metadata
 src/tools.mjs          Guarded file read/new-note write and fake documentation adapters
-src/audit.mjs          Append-only JSONL event storage and grouped statistics
+src/audit.mjs          JSONL + HMAC integrity chain, durable checkpoint and grouped statistics
 src/activity.mjs       Immutable event-to-tool-request lifecycle projection
 src/demo.mjs           Nine scripted regression scenarios
 public/                Browser dashboard and real-agent prompt UI

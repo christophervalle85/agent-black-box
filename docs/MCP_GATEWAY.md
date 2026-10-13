@@ -111,3 +111,8 @@ Start the **dashboard first** so it can generate its ephemeral token. The token 
 - [MCP 2026-07-28 tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
 - [Official TypeScript SDK v2 protocol-era negotiation](https://ts.sdk.modelcontextprotocol.io/v2/protocol-versions)
 - [Official TypeScript SDK v2 migration details](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28)
+
+
+## v0.6 process isolation
+
+Set `MCP_SANDBOX=required` on Linux with Bubblewrap installed to run the fixed notes server inside isolated user/PID/IPC/UTS/network namespaces and a filesystem mount allowlist. On macOS this mode fails closed until a signed Apple App Sandbox helper is available; the default local demo mode remains unsandboxed. See [SANDBOX_AUDIT.md](SANDBOX_AUDIT.md).

@@ -56,3 +56,12 @@ test('MCP peer kills the downstream on cancellation after forwarding',async()=>{
   assert.equal(child.killed,true);
   await assert.rejects(peer.request('tools/list'),/unavailable/i);
 });
+
+test('broken downstream stdin fails a pending MCP request instead of emitting an uncaught EPIPE',async()=>{
+  const {spawn}=await import('node:child_process');
+  const {McpPeer}=await import('../src/mcp-wire.mjs');
+  const child=spawn(process.execPath,['-e','process.stdin.destroy();process.exit(3)'],{stdio:['pipe','pipe','ignore']});
+  const peer=new McpPeer(child,{timeoutMs:500});
+  await assert.rejects(peer.request('initialize',{protocolVersion:'2025-11-25'}),/Downstream|EPIPE|closed|exited|failed/i);
+  peer.close();
+});

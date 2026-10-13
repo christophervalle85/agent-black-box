@@ -14,12 +14,13 @@ import { randomUUID } from 'node:crypto';
 import { AuditStore } from './audit.mjs';
 import { guardedToolCall } from './monitor.mjs';
 import { McpPeer, readJsonLines, sendJsonLine } from './mcp-wire.mjs';
+import { downstreamLaunch } from './sandbox.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LEGACY = '2025-11-25';
 const MODERN = '2026-07-28';
 const SUPPORTED = Object.freeze([MODERN, LEGACY]);
-const IDENTITY = Object.freeze({ name: 'agent-black-box-gateway', version: '0.5.0' });
+const IDENTITY = Object.freeze({ name: 'agent-black-box-gateway', version: '0.6.0' });
 const ALLOWED = Object.freeze({ read_note: 'file.read', write_note: 'file.write' });
 const schema = { type: 'object', additionalProperties: false };
 const EXPOSED_TOOLS = Object.freeze([
@@ -46,9 +47,9 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
   const port = Number(env.MCP_CONTROLLER_PORT ?? 4317);
   if (!Number.isSafeInteger(port) || port<1 || port>65535) throw Error('Invalid MCP_CONTROLLER_PORT.');
   const store = new AuditStore(auditFile);
-  const downstream = spawn(process.execPath,[fileURLToPath(new URL('../examples/mcp-notes-server.mjs',import.meta.url))],{
-    cwd:root, shell:false, stdio:['pipe','pipe','inherit'],
-    env:{BLACKBOX_WORKSPACE_ROOT:workspaceRoot,LANG:'C.UTF-8',PATH:process.env.PATH??'/usr/bin:/bin'}
+  const launch = downstreamLaunch({env,workspaceRoot,scriptPath:fileURLToPath(new URL('../examples/mcp-notes-server.mjs',import.meta.url))});
+  const downstream = spawn(launch.command,launch.args,{
+    cwd:root, shell:false, stdio:['pipe','pipe','inherit'], env:launch.env
   });
   const peer = new McpPeer(downstream,{timeoutMs:12000});
   let era = null; // one process cannot switch from modern to legacy (or reverse)
@@ -190,7 +191,7 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
   function close(){if(closed)return;closed=true;unlisten();for(const ctrl of active.values())ctrl.abort();peer.close();}
   input.on('end',close);
   process.once('SIGTERM',close);
-  onReady?.({close,downstream,peer});
+  onReady?.({close,downstream,peer,sandbox:launch.description});
   return {close,downstream,peer};
 }
 

@@ -12,6 +12,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm test
+      - run: node --check examples/mcp-isolation-check.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
@@ -23,3 +24,29 @@ jobs:
       # not a runtime dependency of the gateway. Pin a patched v2 release.
       - run: npm install --no-save --package-lock=false @modelcontextprotocol/client@2.3.1
       - run: npm run test:mcp-sdk
+  sandbox-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install official Bubblewrap package
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Required Linux sandbox, or explicit fail-closed OS denial
+        shell: bash
+        run: |
+          set +e
+          timeout 35s env MCP_SANDBOX=required npm run mcp:smoke > /tmp/bwrap-check.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/bwrap-check.log
+          if [ "$result" -eq 0 ]; then
+            echo "Bubblewrap executable and kernel supported sandboxed MCP read."
+            timeout 35s env MCP_SANDBOX=required npm run mcp:modern
+          elif grep -E 'bwrap:.*(Operation not permitted|Permission denied)' /tmp/bwrap-check.log && grep -q 'MCP smoke failed:' /tmp/bwrap-check.log; then
+            echo '::warning::GitHub runner kernel blocks Bubblewrap; fail-closed gateway verified. Full sandbox integration must be tested on a compatible Linux host.'
+          else
+            echo 'Unexpected sandbox integration failure.'
+            exit 1
+          fi

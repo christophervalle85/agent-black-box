@@ -9,6 +9,14 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const processGateway=spawn(process.execPath,[resolve(root,'src/mcp-gateway.mjs')],{cwd:root,stdio:['pipe','pipe','inherit']});
 let nextId=1;
 const outstanding=new Map();
+processGateway.on('exit', () => {
+  for (const p of outstanding.values()) {clearTimeout(p.timer);p.reject(Error('MCP gateway exited before completing request.'));}
+  outstanding.clear();
+});
+processGateway.stdin.on('error', error => {
+  for (const p of outstanding.values()) {clearTimeout(p.timer);p.reject(error);}
+  outstanding.clear();
+});
 readJsonLines(processGateway.stdout,{onMessage:message=>{
   const p=outstanding.get(message.id);
   if(p){outstanding.delete(message.id);clearTimeout(p.timer);if(message.error)p.reject(Error(message.error.message));else p.resolve(message.result);}
@@ -16,7 +24,7 @@ readJsonLines(processGateway.stdout,{onMessage:message=>{
 function request(method,params={}){
   const id=nextId++;
   return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{outstanding.delete(id);reject(Error('MCP request timed out.'));},105000);
+    const timer=setTimeout(()=>{outstanding.delete(id);reject(Error('MCP request timed out.'));},process.argv.includes('--approval') ? 105000 : 15000);
     outstanding.set(id,{resolve,reject,timer});
     sendJsonLine(processGateway.stdin,{jsonrpc:'2.0',id,method,params});
   });

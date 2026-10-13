@@ -51,3 +51,8 @@ The UI is designed for a single trusted local operator. It is not authenticated,
 ## v0.5 MCP compatibility/hardening limits
 
 The gateway now serves the documented 2026-07-28 modern MCP tool subset as well as the 2025-11-25 legacy subset; unknown protocol revisions and missing modern metadata are rejected. Downstream initialization now follows the legacy notification order. A cancelled forwarded request terminates the downstream process, but an earlier side effect remains possible and must be considered **outcome uncertain**. Do not interpret cancellation as atomic rollback. The downstream is still an unsandboxed executable with the invoking user's OS privileges, and the audit file is not tamper-evident. This remains a local educational prototype, not a multi-user production security gateway.
+
+
+## v0.6 OS sandbox and audit integrity
+
+See [SANDBOX_AUDIT.md](SANDBOX_AUDIT.md). Linux `MCP_SANDBOX=required` uses Bubblewrap and refuses to run without a functioning sandbox. On macOS the standard Node CLI is explicitly **not OS-sandboxed**; Apple requires signed and entitled App Sandbox helpers for supported isolation. New audit entries are checked with keyed HMAC-SHA256 and a local checkpoint. These local artifacts are tamper-evident against accidental/unauthorized edits *without the key* but are not independently immutable or safe from a same-user attacker. Legacy history requires explicit trust-on-first-use sealing before v0.6 begins.
