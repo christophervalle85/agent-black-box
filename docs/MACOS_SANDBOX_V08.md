@@ -103,6 +103,16 @@ The harness builds and signs a disposable host `.app` and nested `.xpc`, checks 
 
 **Strict limitation:** This deliberately operates only on synthetic files in the service's sandbox-accessible `TMPDIR`, **not** the project's demo workspace or durable notes. It has **no bridge to the Node MCP gateway**, no user approvals, no audit integration and no claim that the notes host is a complete MCP server. The earlier XPC OS isolation proof and existing Node policy/approval/audit checks remain separate. The test must pass on a real Mac before designing the Node-to-native IPC gateway or persistent workspace. No production credentials or existing audit records are needed. The native service is not yet hardened with client code-signature identity checks, and no other process should place sensitive content in this temporary test area.
 
+### Phase 2b — Experimental Node to native host to private XPC transport
+
+The **Phase 2A Mac test passed**: the separately signed App Sandbox notes worker performed a synthetic new-file write, returned exact note content, denied traversal, and removed its test file. No Node MCP or approval/audit path was exercised.
+
+`npm run mcp:mac-xpc-node-bridge` now tests a **separate bounded binary IPC** between a Node script and a signed native host executable. The host forwards only `READ`, `WRITE` and `REMOVE` synthetic note commands to the previously validated private notes XPC worker. It uses bounded, length-prefixed note bodies via **stdin**, not process command-line arguments or environment variables. The native host is unsandboxed but designed to access only its private XPC service; the OS-enforced file boundary remains in the signed XPC service. There is no shell execution or generic tool forwarding.
+
+The native worker still accepts only `bbx-test-*.txt` filenames (≤64 characters) and up to 2,000 bytes, and rejects attempts at paths outside its synthetic test namespace. The bridge smoke also attempts duplicate new-file creation, rejects a test traversal, confirms the original content is unchanged, removes the synthetic note and verifies it cannot be read afterward. The test deletes its temporary signed app bundle.
+
+**Important:** This is NOT a production MCP downstream, not durable notes storage, and not connected to `src/mcp-gateway.mjs`. This smoke deliberately bypasses human approvals and audit logs **because it can access only expendable synthetic test fixtures**; it must not be repurposed for real files. Before routing user-controlled operations, we need to align policy and XPC workspace identity, use a native durable container directory, constrain client identity/signature and executable trust, enforce operator approval and authenticated audit logging, handle XPC request cancellation and uncertain write outcomes, and replay both OS-denial tests on the final service. A synchronous XPC response can block indefinitely according to [Apple's API documentation](https://developer.apple.com/documentation/xpc/xpc_connection_send_message_with_reply_sync%28_%3A_%3A%29); the test's Node process supervisor imposes a timeout and treats a timed-out write as an **unknown outcome**, not a rollback. macOS `MCP_SANDBOX=required` must remain fail-closed.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

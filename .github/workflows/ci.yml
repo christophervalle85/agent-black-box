@@ -19,6 +19,7 @@ jobs:
       - run: node --check examples/mcp-macos-crash.mjs
       - run: node --check examples/mcp-macos-xpc-probe.mjs
       - run: node --check examples/mcp-macos-xpc-notes.mjs
+      - run: node --check examples/mcp-macos-xpc-node-bridge.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
