@@ -72,14 +72,14 @@ test('external checkpoint mismatch blocks guarded operations before execution',a
   local.add(event('first'));
   const trusted=exportReceipt(local);
   const external=file+'.independent-receipt.json';
-  writeFileSync(external,JSON.stringify(trusted)+'\\n');
+  writeFileSync(external,JSON.stringify(trusted)+'\n');
   const guarded=new AuditStore(file,{externalReceiptFile:external});
   const forgedRaw=JSON.stringify(event('rewritten'));
   const key=local.keyUnsafe(),prev='0'.repeat(64);
   const mac=actualHmac('sha256',key).update(JSON.stringify({version:1,seq:1,prev,raw:forgedRaw}), 'utf8').digest('hex');
-  writeFileSync(file,forgedRaw+'\\n');
-  writeFileSync(local.macFile,JSON.stringify({seq:1,prev,mac})+'\\n');
-  writeFileSync(local.anchorFile,JSON.stringify({seq:1,mac})+'\\n');
+  writeFileSync(file,forgedRaw+'\n');
+  writeFileSync(local.macFile,JSON.stringify({seq:1,prev,mac})+'\n');
+  writeFileSync(local.anchorFile,JSON.stringify({seq:1,mac})+'\n');
   assert.equal(local.verify().ok,true);
   assert.throws(()=>new AuditStore(file,{externalReceiptFile:external}),/CHECKPOINT FORK/);
   let executed=false;
