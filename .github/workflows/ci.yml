@@ -22,6 +22,8 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-node-bridge.mjs
       - run: node --check examples/mcp-macos-xpc-durable.mjs
       - run: node --check examples/mcp-macos-xpc-authority.mjs
+      - run: node --check examples/mcp-macos-xpc-mcp-acceptance.mjs
+      - run: node --check examples/mcp-macos-xpc-mcp-downstream.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

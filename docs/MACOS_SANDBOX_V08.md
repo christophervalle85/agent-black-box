@@ -151,6 +151,27 @@ The acceptance script first proves that the existing demo workspace cannot bind 
 
 **Gateway remains unchanged:** no real MCP tool routing, durable user document ingestion, operator approval or authenticated audit. `MCP_SANDBOX=required` continues to refuse execution on macOS. The private worker is test-only and named `bbx-test-*.txt`; the Node policy currently permits a broader set of paths, so those grammars also need harmonization before enabling actual MCP calls.
 
+### Phase 3A — Real MCP policy/approval/audit path with synthetic XPC notes (Mac acceptance pending)
+
+**Phase 2D Mac result PASSED:** The user executed `npm run mcp:mac-xpc-authority` and confirmed the private worker's canonical Documents identity matched an explicitly chosen test policy root, while the unrelated `demo-workspace` was refused. It also repeated signed XPC storage read/write, exclusive-create, path-traversal rejection and cleanup. No signer attestation, XPC service restart or real MCP authorization has been proven by that test alone.
+
+Run the **opt-in** Phase 3A Mac acceptance only:
+
+```sh
+npm run mcp:mac-xpc-mcp-acceptance
+```
+
+The harness constructs a disposable signed XPC host/service bundle, verifies nested signatures and App Sandbox entitlement, queries the worker's Documents path, rejects the unrelated repo demo workspace, then creates a **fresh isolated audit store and localhost approval controller** in a temporary directory. Through an **in-process-only experimentalLaunch test hook**, it instantiates the *actual* `startGateway` code and the same `guardedToolCall` policy, approval and authenticated audit logic as the existing MCP gateway. The downstream is an experimental test-only MCP adapter that sends bounded stdin frames to a separately signed native host and the private XPC worker.
+
+The acceptance scenario sends genuine **legacy MCP stdio JSON-RPC requests** to the gateway: `initialize`, `tools/list`, blocked traversal, a write **denied through the real dashboard approval endpoint**, a write **explicitly approved through that endpoint**, readback from XPC, a second approved but **native-rejected duplicate write**, and verification of HMAC audit chain validity and the absence of full note content in the audit records. Native files are restricted to synthetic `bbx-test-*.txt` notes; the test removes the approved synthetic note after use. A crash may leave a harmless test file in the sandbox Documents scratch folder. **No real user notes or the existing audit/key/checkpoint history are touched.**
+
+**Security limits that remain critical:**
+- The ordinary `src/mcp-gateway.mjs` CLI still uses its fixed bundled Node downstream. Only a direct in-process test harness can pass `experimentalLaunch`, and that hook **refuses `MCP_SANDBOX=required` or any non-macOS platform**. This new test deliberately uses `MCP_SANDBOX=off`; it does **not** prove or enable production required-mode isolation.
+- The Node/native host process is **unsandboxed** in this experiment, while the private XPC worker is the enforced filesystem/network boundary; the host's native service still only supports the synthetic note filename grammar. A production implementation requires trusted code-signing identity checks beyond ad-hoc signature syntax, and authenticated/authorized binding of the bridge to the intended service.
+- Policy path checks and native exclusive-create checks are not an atomic authorization transaction across processes. We must address TOCTOU, XPC service identity, cancellation, crash recovery, unknown write outcome, and mismatched native/Node filename grammars.
+- The acceptance uses an isolated disposable audit history rather than the real user's authentic historical events. It tests **legacy** MCP only; modern protocol and SDK interoperability through the native path need their own Mac runtime acceptance.
+- The native scratch Documents container persists across test invocations, but may retain synthetic orphan notes after abrupt termination. Never expose it as a real document workspace until lifecycle management, explicit import/export and cleanup are designed.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

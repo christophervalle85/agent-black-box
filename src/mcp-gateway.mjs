@@ -15,6 +15,7 @@ import { AuditStore } from './audit.mjs';
 import { guardedToolCall } from './monitor.mjs';
 import { McpPeer, readJsonLines, sendJsonLine } from './mcp-wire.mjs';
 import { downstreamLaunch } from './sandbox.mjs';
+import { chooseGatewayLaunch } from './mcp-experimental-launch.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LEGACY = '2025-11-25';
@@ -40,14 +41,20 @@ function validArgs(name,args) {
   return name === 'write_note' && Object.keys(args).length === 2 && typeof args.content === 'string';
 }
 
-export async function startGateway({ input=process.stdin, output=process.stdout, env=process.env, onReady }={}) {
+// In-process experimentalLaunch is ONLY for the isolated macOS acceptance
+// harness. No CLI environment variable can enable it; required mode still
+// refuses macOS execution. Remove before production distribution.
+export async function startGateway({ input=process.stdin, output=process.stdout, env=process.env, onReady, experimentalLaunch }={}) {
   const workspaceRoot = realpathSync(resolve(env.MCP_WORKSPACE_ROOT ?? join(root,'demo-workspace')));
   const auditFile = resolve(env.MCP_AUDIT_FILE ?? join(root,'data','audit.jsonl'));
   const tokenFile = resolve(env.MCP_TOKEN_FILE ?? join(dirname(auditFile),'mcp-controller-token'));
   const port = Number(env.MCP_CONTROLLER_PORT ?? 4317);
   if (!Number.isSafeInteger(port) || port<1 || port>65535) throw Error('Invalid MCP_CONTROLLER_PORT.');
   const store = new AuditStore(auditFile);
-  const launch = downstreamLaunch({env,workspaceRoot,scriptPath:fileURLToPath(new URL('../examples/mcp-notes-server.mjs',import.meta.url))});
+  const standard = downstreamLaunch({env,workspaceRoot,scriptPath:fileURLToPath(new URL('../examples/mcp-notes-server.mjs',import.meta.url))});
+  const launch = chooseGatewayLaunch({
+    standard,experimental:experimentalLaunch,platform:process.platform,mode:env.MCP_SANDBOX??'off'
+  });
   const downstream = spawn(launch.command,launch.args,{
     cwd:root, shell:false, stdio:['pipe','pipe','inherit'], env:launch.env
   });
