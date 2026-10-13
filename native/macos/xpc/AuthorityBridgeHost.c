@@ -18,6 +18,9 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <limits.h>
+#ifdef BBX_TEST_PEER_REQUIREMENT
+#include "PeerRequirementGate.h"
+#endif
 
 static bool test_name(const char *name) {
     size_t n=name?strnlen(name,80):0;
@@ -47,6 +50,19 @@ int main(void){
     xpc_connection_t connection=xpc_connection_create("dev.agentblackbox.xpc-authority.worker",
                                                        dispatch_get_global_queue(QOS_CLASS_DEFAULT,0));
     if(!connection)return 70;
+#ifdef BBX_TEST_PEER_REQUIREMENT
+    // This alternate build is ONLY for the ad-hoc negative acceptance probe.
+    // A production host must invoke an equivalent gate unconditionally,
+    // once the application and nested worker use approved Developer ID keys.
+    int peerGate=bbx_install_same_team_peer_requirement(
+        connection,"dev.agentblackbox.xpc-authority.worker");
+    if(peerGate!=0) {
+        fputs("BBX_PEER_REQUIREMENT_UNAVAILABLE\n",stderr);
+        xpc_connection_cancel(connection);
+        xpc_release(connection);
+        return 85;
+    }
+#endif
     xpc_connection_set_event_handler(connection, ^(xpc_object_t event) {
         (void)event;
     });
@@ -100,6 +116,23 @@ int main(void){
          */
         xpc_object_t reply=xpc_connection_send_message_with_reply_sync(connection,request);
         xpc_release(request);
+#ifdef BBX_TEST_PEER_REQUIREMENT
+        // At this point Apple accepted the OS-level requirement installation.
+        // A dictionary response would mean an ad-hoc-signed peer was
+        // unexpectedly accepted as a valid same-Team-ID identity.
+        if(reply && xpc_get_type(reply)==XPC_TYPE_ERROR) {
+            fputs("BBX_PEER_REQUIREMENT_OS_REJECTED\n",stderr);
+            xpc_release(reply);
+            xpc_connection_cancel(connection);
+            xpc_release(connection);
+            return 86;
+        }
+        fputs("BBX_PEER_REQUIREMENT_UNEXPECTED_ACCEPT_OR_UNKNOWN\n",stderr);
+        if(reply)xpc_release(reply);
+        xpc_connection_cancel(connection);
+        xpc_release(connection);
+        return 87;
+#endif
         if(!reply || xpc_get_type(reply)!=XPC_TYPE_DICTIONARY ||
            !xpc_dictionary_get_bool(reply,"ok")){
             response(false,NULL,0);

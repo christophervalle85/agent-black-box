@@ -303,3 +303,16 @@ Official Apple guidance: [Creating distribution-signed code for macOS](https://d
 ## v0.8 release acceptance
 
 Native macOS file and network denial **from the production worker**, not merely from this probe; safe positive workspace operation; Mac required-mode MCP legacy/modern protocol tests; approvals and audit chain remain intact; Linux Bubblewrap 7/7 acceptance preserved; CI and manual signature verification documented. No merge to `main` until user Mac results establish those claims.
+
+## Phase 4 — real XPC peer identity, Developer ID pending
+
+I added a **separate, optional ad-hoc negative experiment** after the successful Phase 3E Mac cancellation runs. It builds the already accepted signed Authority host and its private notes worker, proves a baseline `workspace_info` response, then recompiles that host with `BBX_TEST_PEER_REQUIREMENT=1`, re-signs the throwaway bundle and requires Apple's **`xpc_connection_set_peer_team_identity_requirement`** on the live host → worker connection *before* resuming it. The same test worker has only an ad-hoc signature and **must not satisfy** Apple's same-team identity requirement.
+
+```sh
+MCP_SANDBOX=off npm run mcp:mac-xpc-peer-negative
+```
+
+The fail-closed `PeerRequirementGate.h` helper resolves Apple's runtime enforcement API. A missing API, failed requirement installation, unavailable baseline, malformed peer identifier, unobserved native worker, ordinary timeout, or an unexpectedly successful worker reply **fails acceptance**; no PID, UID or process-name trust fallback is permitted. This code is used ONLY in an alternate test host build and never relaxes the previously accepted sandbox / gateway. A positive Developer ID trust path still needs externally pinned signing identities, **worker-side authentication of its host peer**, approved code-signing trust, and live Mac acceptance. This negative result alone is not a production signing gate. Apple reference: [XPC same-team peer identity requirement](https://developer.apple.com/documentation/xpc/xpc_connection_set_peer_team_identity_requirement%28_%3A_%3A%29).
+
+Mac observation: `security find-identity -v -p codesigning` found **zero currently valid identities**. Accordingly, no real Developer ID positive test can be accepted here. Apple Developer Program membership can eventually support separate [Apple Distribution (App Store)](https://developer.apple.com/help/account/certificates/certificates-overview/) and [Developer ID (outside Store)](https://developer.apple.com/developer-id/) workflows.
+
