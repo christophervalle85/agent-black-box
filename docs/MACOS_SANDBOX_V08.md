@@ -42,6 +42,13 @@ All three must pass. The script cleans up its temporary code and marker, and pri
 
 **Mac prerequisites:** `xcrun --find swiftc` and `codesign --version`, typically provided by Xcode/Command Line Tools. This test is not run by Linux CI: Swift/macOS kernel policy cannot be emulated reliably there.
 
+
+### If code signing succeeds but the native helper exits without a status
+
+Node's synchronous child-process API reports `status: null` for a signal-terminated process; status alone does **not** tell us whether the OS denied execution, the binary trapped, or it timed out. The probe's native launch now uses asynchronous `spawn` with an explicit 12-second deadline, and prints `status`, `signal`, `timedOut`, `error`, `stderr` and elapsed time when something fails.
+
+For relevant Apple sandbox diagnostics, use the **Console** app and search for `type:error`, subsystem `com.apple.sandbox.reporting`, and category `violation`, as described in [Apple's App Sandbox violation guide](https://developer.apple.com/documentation/security/discovering-and-diagnosing-app-sandbox-violations). A `SIGTRAP` or `SIGKILL` is not itself evidence that the intended restrictions work. Apple's engineering team also describes a specific `libsystem_secinit` entitlement conflict when an **embedded tool** attempts to start a new sandbox instead of inheriting its parent's; our standalone test is different, so do not assume that explanation without diagnostics ([Apple Developer Forums](https://developer.apple.com/forums/thread/679940)). Do not disable SIP, Gatekeeper, or App Sandbox to make the probe pass.
+
 ## Phase 2 — native XPC worker architecture (not yet implemented)
 
 - Build a dedicated sandboxed XPC service inside a minimal signed macOS host app, separated from the existing unsandboxed Node control plane. Model its IPC as a fixed set of `read_note`/`write_note` operations; never forward arbitrary tool names, paths, file descriptors or commands.

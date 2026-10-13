@@ -4,9 +4,9 @@
  * checks its signature/entitlements, then tests actual OS-denied operations.
  * Does not change the MCP gateway or its OS-isolation guarantees.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { connect, createServer } from 'node:net';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,40 @@ function success(command,args,{title,timeout=60000}={}) {
   if(r.error||r.status!==0)throw Error((title??command)+' failed: '+(r.error?.message??r.stderr?.trim()??'')+' (exit '+r.status+')');
   return r;
 }
+
+/**
+ * Real helper execution is asynchronous so the parent's loopback test server
+ * continues accepting connections while the native child is running.
+ * A signal, timeout, and spawn error are distinguished explicitly.
+ */
+async function runNative(executable,args,{timeout=12000}={}) {
+  const started=Date.now();
+  return new Promise(resolve=>{
+    let stdout='',stderr='',spawnError=null,timedOut=false,outputExceeded=false;
+    const child=spawn(executable,args,{stdio:['ignore','pipe','pipe'],shell:false});
+    const maxBytes=256*1024;
+    const capture=(key,data)=>{
+      const chunk=data.toString('utf8');
+      if(key==='stdout') stdout+=chunk;
+      else stderr+=chunk;
+      if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>maxBytes) {
+        outputExceeded=true;
+        child.kill('SIGKILL');
+      }
+    };
+    child.stdout?.on('data',chunk=>capture('stdout',chunk));
+    child.stderr?.on('data',chunk=>capture('stderr',chunk));
+    child.on('error',error=>{spawnError=error;});
+    const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},timeout);
+    child.on('close',(status,signal)=>{
+      clearTimeout(timer);
+      resolve({status,signal,stdout:stdout.slice(0,maxBytes),stderr:stderr.slice(0,maxBytes),
+        error:spawnError?.message??null,errorCode:spawnError?.code??null,
+        timedOut,outputExceeded,elapsedMs:Date.now()-started});
+    });
+  });
+}
+
 function ensureEntitlements(executable) {
   success('/usr/bin/codesign',['--verify','--strict',executable],{title:'codesign verification'});
   const info=success('/usr/bin/codesign',['--display','--entitlements','-','--xml',executable],{title:'codesign entitlement inspection'});
@@ -62,8 +96,15 @@ async function main() {
       '--entitlements',join(native,'SandboxProbe.entitlements'),executable],{title:'Local ad-hoc signing'});
     ensureEntitlements(executable);
     const listener=await endpoint();server=listener.server;
-    const proof=run(executable,['--probe',realpathSync(privateFile),String(listener.port)],{timeout:12000});
-    if(proof.error||proof.status!==0)throw Error('Signed helper failed to run: '+(proof.error?.message??proof.stderr?.trim()??'')+' (exit '+proof.status+')');
+    const proof=await runNative(executable,['--probe',realpathSync(privateFile),String(listener.port)],{timeout:12000});
+    if(proof.error||proof.status!==0||proof.signal||proof.timedOut||proof.outputExceeded) {
+      console.error('Native process diagnostics:',JSON.stringify({
+        status:proof.status,signal:proof.signal,error:proof.error,errorCode:proof.errorCode,
+        timedOut:proof.timedOut,outputExceeded:proof.outputExceeded,elapsedMs:proof.elapsedMs,
+        stderr:proof.stderr.slice(0,2000),stdout:proof.stdout.slice(0,500)
+      },null,2));
+      throw Error('Signed native helper terminated before completing its checks; do not claim OS isolation.');
+    }
     let diagnostics;
     try{diagnostics=JSON.parse(proof.stdout);}catch{throw Error('Native probe produced invalid JSON: '+proof.stdout.slice(0,300));}
     const verdict=assessMacProbe(diagnostics);
