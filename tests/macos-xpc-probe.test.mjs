@@ -32,3 +32,11 @@ test('XPC C code links against macOS libSystem, not unavailable standalone -lxpc
  assert.doesNotMatch(script, /['\"]-lxpc['\"]/);
  assert.match(script, /join\(sources,src\)\],label\+' compilation'/);
 });
+
+test('XPC service hands xpc_main a C function pointer, not an event block',()=>{
+ const source=readFileSync(new URL('../native/macos/xpc/ProbeService.c',import.meta.url),'utf8');
+ assert.match(source,/static void accept_peer\(xpc_connection_t peer\)/);
+ assert.match(source,/xpc_main\(accept_peer\)/);
+ assert.doesNotMatch(source,/xpc_main\(\s*\^/);
+ assert.match(source,/xpc_connection_set_event_handler\(peer,\s*\^\(xpc_object_t event\)/);
+});

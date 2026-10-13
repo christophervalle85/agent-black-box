@@ -83,12 +83,18 @@ static void respond(xpc_connection_t peer, xpc_object_t message) {
     xpc_release(reply);
 }
 
-int main(void) {
-    xpc_main(^(xpc_connection_t peer) {
-        xpc_connection_set_event_handler(peer,^(xpc_object_t event) {
-            if(xpc_get_type(event)==XPC_TYPE_DICTIONARY)respond(peer,event);
-        });
-        xpc_connection_resume(peer);
+/*
+ * Apple's xpc_main() takes xpc_connection_handler_t: a C function pointer.
+ * xpc_connection_set_event_handler() separately accepts an XPC block.
+ */
+static void accept_peer(xpc_connection_t peer) {
+    xpc_connection_set_event_handler(peer, ^(xpc_object_t event) {
+        if(xpc_get_type(event)==XPC_TYPE_DICTIONARY)respond(peer,event);
     });
-    return 70;
+    xpc_connection_resume(peer);
+}
+
+int main(void) {
+    xpc_main(accept_peer);
+    return 70; // xpc_main does not normally return.
 }
