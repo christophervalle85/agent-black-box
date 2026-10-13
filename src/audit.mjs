@@ -12,6 +12,8 @@ import {
 import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { groupAuditEvents, filterActivity } from './activity.mjs';
+import { appendJournaled, finishPending } from './audit-journal.mjs';
+import { assertExternalReceipt } from './checkpoints.mjs';
 
 const MAX_BYTES = 64 * 1024 * 1024;
 const ZERO = '0'.repeat(64);
@@ -64,15 +66,18 @@ function safeEqual(a, b) {
   return typeof a === 'string' && typeof b === 'string' && /^[0-9a-f]{64}$/.test(a) && /^[0-9a-f]{64}$/.test(b) && timingSafeEqual(Buffer.from(a,'hex'), Buffer.from(b,'hex'));
 }
 export class AuditStore extends EventEmitter {
-  constructor(filename,{allowLegacySeal=false}={}) {
+  constructor(filename,{allowLegacySeal=false,fault=null,externalReceiptFile=process.env.MCP_EXTERNAL_RECEIPT_FILE??null}={}) {
     super();
     this.filename = filename;
     this.macFile = `${filename}.mac.jsonl`;
     this.keyFile = `${filename}.hmac.key`;
     this.anchorFile = `${filename}.anchor.json`;
     this.lock = `${filename}.writer.lock`;
+    this.pendingFile = `${filename}.pending.json`;
+    this.fault = fault;
+    this.externalReceiptFile=externalReceiptFile;
     mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
-    for (const file of [filename, this.macFile, this.keyFile, this.anchorFile]) assertFile(file);
+    for (const file of [filename, this.macFile, this.keyFile, this.anchorFile, this.pendingFile]) assertFile(file);
     this.locked(() => {
       const present = [this.macFile, this.keyFile, this.anchorFile].map(existsSync);
       if (present.some(Boolean) && !present.every(Boolean)) throw new Error('Audit integrity metadata incomplete; refusing to reinitialize.');
@@ -99,6 +104,7 @@ export class AuditStore extends EventEmitter {
         writeAtomic(this.anchorFile, JSON.stringify({seq:original.length,mac:prev}) + '\n');
         if (!existsSync(filename)) { const fd=openSync(filename, constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW, 0o600); closeSync(fd); }
       }
+      finishPending(this,{sign,safeEqual,appendDurable,writeAtomic});
       this.verifyUnsafe();
       for (const file of [filename, this.macFile, this.keyFile, this.anchorFile]) chmodSync(file, 0o600);
     });
@@ -117,7 +123,8 @@ export class AuditStore extends EventEmitter {
     if (!/^[a-f0-9]{64}$/.test(raw)) throw Error('Invalid audit integrity key.');
     return Buffer.from(raw,'hex');
   }
-  verifyUnsafe() {
+  verifyUnsafe({allowPending=false}={}) {
+    if(!allowPending && existsSync(this.pendingFile))throw Error('RECOVERY REQUIRED: outstanding authenticated audit transaction. Restart to recover.');
     const content = rows(readBounded(this.filename));
     const signatures = rows(readBounded(this.macFile));
     const checkpoint = JSON.parse(readBounded(this.anchorFile));
@@ -134,7 +141,12 @@ export class AuditStore extends EventEmitter {
     }
     if(checkpoint.seq!==content.length || !safeEqual(checkpoint.mac,prev))
       throw Error('Audit checkpoint mismatch: records may have been truncated or checkpoint changed.');
-    return {ok:true, records:content.length, head:prev, content};
+    const state={ok:true, records:content.length, head:prev, content};
+    if(this.externalReceiptFile){
+      const receipt=JSON.parse(readBounded(this.externalReceiptFile));
+      assertExternalReceipt(this,receipt,state);
+    }
+    return state;
   }
   verify() { return this.locked(() => { const {content,...result}=this.verifyUnsafe();return result; }); }
   add(event) {
@@ -143,9 +155,7 @@ export class AuditStore extends EventEmitter {
       const raw=JSON.stringify(event);
       if(raw.includes('\n'))throw Error('Audit records must remain single-line JSON.');
       const seq=integrity.records+1, mac=sign(this.keyUnsafe(),seq,integrity.head,raw);
-      appendDurable(this.filename,raw);
-      appendDurable(this.macFile,JSON.stringify({seq,prev:integrity.head,mac}));
-      writeAtomic(this.anchorFile,JSON.stringify({seq,mac}) + '\n');
+      appendJournaled(this,{raw,seq,prev:integrity.head,mac,appendDurable,writeAtomic,fault:this.fault});
     });
     this.emit('event', event);
     return event;
