@@ -12,6 +12,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm test
+      - run: node --check examples/mcp-isolation-check.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

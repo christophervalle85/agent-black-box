@@ -18,7 +18,8 @@
     "test:mcp-sdk": "node --test tests/mcp-sdk-interoperability.mjs",
     "mcp:modern": "node examples/mcp-modern-smoke.mjs",
     "audit:verify": "node src/audit-cli.mjs verify",
-    "audit:seal": "node src/audit-cli.mjs seal"
+    "audit:seal": "node src/audit-cli.mjs seal",
+    "mcp:isolation": "node examples/mcp-isolation-check.mjs"
   },
   "license": "MIT"
 }

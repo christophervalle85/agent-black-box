@@ -56,3 +56,33 @@ Detects offline modification, truncation, deletion of individual signed events, 
 **Does not** protect against a malicious or compromised same-user process that can read the key, create alternate signatures and replace the checkpoint; an attacker who can erase *all* local state; root/admin compromise; disk rollback including key and checkpoint; replay of independently copied whole snapshots; log confidentiality against same-user processes; or physical hardware failures. For independently verifiable, immutable evidence, sign/export periodic checkpoint heads to a separately administered storage or transparency service, run under a different OS identity, and deploy proper key management.
 
 Verification reads the chain (bounded to 64 MiB) and therefore has linear I/O/CPU cost. At scale, use an indexed append-only store and secure remote attestations rather than this local prototype. No unsafe automatic repair is attempted after partial writes. A full event is fsynced before its MAC is appended; the MAC is fsynced before the checkpoint is atomically replaced.
+
+
+### Ubuntu AppArmor and real isolation acceptance
+
+Ubuntu 24.04's \`kernel.apparmor_restrict_unprivileged_userns=1\` may deny
+Bubblewrap network namespace setup (\`RTM_NEWADDR: Operation not permitted\`).
+Do not disable AppArmor globally. The upstream
+[AppArmor v4.1 Bubblewrap profile](https://gitlab.com/apparmor/apparmor/-/raw/v4.1.0/profiles/apparmor/profiles/extras/bwrap-userns-restrict)
+allows namespace setup and stacks \`unpriv_bwrap\` on the executed child
+to drop its capabilities. Any adapted profile must be reviewed and tested;
+a copied executable plus local policy is **host configuration**, not part
+of the default gateway installation.
+
+On a compatible Linux test VM with the dedicated profile installed:
+
+\`\`\`bash
+MCP_BWRAP_PATH=/usr/local/libexec/agent-black-box/bwrap MCP_SANDBOX=required npm run mcp:isolation
+\`\`\`
+
+The acceptance script uses the **same downstream launch plan** as the MCP gateway,
+then replaces the downstream program with a benign checker. It verifies
+the child is in an enforcing \`unpriv_bwrap\` AppArmor profile; mount and
+network namespace identities differ from the host; a temporary host-only
+file is inaccessible; the approved workspace remains writable; and an
+outbound IPv4 connection is rejected with a network/permission error.
+The script deletes its temporary host and workspace files. If the test
+fails or the profile is in complain mode, **do not call this host hardened**.
+
+This diagnostic checks specific boundaries, not complete isolation,
+syscall filtering, kernel vulnerability resistance, or production readiness.
