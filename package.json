@@ -38,7 +38,8 @@
     "mcp:mac-xpc-service-failure": "node examples/mcp-macos-xpc-service-failure.mjs",
     "mcp:mac-xpc-cancellation": "node examples/mcp-macos-xpc-cancellation.mjs",
     "mcp:mac-signer-trust": "node examples/mcp-macos-signer-trust.mjs",
-    "mcp:mac-xpc-peer-negative": "node examples/mcp-macos-xpc-peer-negative.mjs"
+    "mcp:mac-xpc-peer-negative": "node examples/mcp-macos-xpc-peer-negative.mjs",
+    "mcp:mac-xpc-notes-isolation": "node examples/mcp-macos-xpc-notes-isolation.mjs"
   },
   "license": "MIT"
 }

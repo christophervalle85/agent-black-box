@@ -24,8 +24,13 @@ int main(int argc,char **argv) {
     long parsed=strtol(argv[2],&end,10);
     if(!end || *end!='\0' || parsed<1 || parsed>65535)
         fail("invalid loopback port",64);
+#ifdef BBX_TEST_NOTES_ISOLATION
+    const char *service="dev.agentblackbox.xpc-authority.worker";
+#else
+    const char *service="dev.agentblackbox.xpc-probe.worker";
+#endif
     xpc_connection_t conn=xpc_connection_create(
-        "dev.agentblackbox.xpc-probe.worker",dispatch_get_main_queue());
+        service,dispatch_get_main_queue());
     if(!conn)fail("could not create embedded XPC connection",70);
     xpc_connection_set_event_handler(conn,^(xpc_object_t event){
         if(xpc_get_type(event)==XPC_TYPE_ERROR)

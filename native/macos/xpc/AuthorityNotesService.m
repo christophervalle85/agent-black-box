@@ -18,6 +18,11 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <limits.h>
+#ifdef BBX_TEST_NOTES_ISOLATION
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 #import <Foundation/Foundation.h>
 
 static bool allowed_name(const char *name) {
@@ -72,7 +77,97 @@ static int notes_fd(void) {
         return dir;
     }
 }
+
+#ifdef BBX_TEST_NOTES_ISOLATION
+/*
+ * BOUNDED, OPT-IN TEST INSTRUMENTATION; absent from ordinary notes builds.
+ * Probe the ACTUAL AuthorityNotesService source under its own App Sandbox.
+ * Input is a synthetic file created by the host and a host-owned listening
+ * loopback port. Probe does not expose arbitrary file reads or data bytes.
+ * Any probe command must be compiled out of production worker binaries.
+ */
+static void isolation_probe(xpc_connection_t peer,xpc_object_t incoming) {
+    xpc_object_t reply=xpc_dictionary_create_reply(incoming);
+    if(!reply)return;
+    xpc_dictionary_set_bool(reply,"valid",false);
+    const char *marker=xpc_dictionary_get_string(incoming,"hostFile");
+    int64_t requestedPort=xpc_dictionary_get_int64(incoming,"port");
+    if(!marker || marker[0]!='/' || strnlen(marker,4097)>4096 ||
+       requestedPort<1 || requestedPort>65535)goto finish;
+
+    int fd=open(marker,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+    int fileError=fd<0?errno:0;
+    if(fd>=0)close(fd);
+    bool fileDenied=fd<0&&(fileError==EPERM||fileError==EACCES);
+
+    int sock=socket(AF_INET,SOCK_STREAM,0);
+    int networkError=sock<0?errno:0;
+    bool networkDenied=false;
+    if(sock>=0){
+        struct sockaddr_in addr={0};
+        addr.sin_len=sizeof(addr);
+        addr.sin_family=AF_INET;
+        addr.sin_port=htons((uint16_t)requestedPort);
+        addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        int connected=connect(sock,(struct sockaddr *)&addr,sizeof(addr));
+        if(connected<0)networkError=errno;
+        networkDenied=connected<0&&
+            (networkError==EPERM||networkError==EACCES);
+        close(sock);
+    }else networkDenied=networkError==EPERM||networkError==EACCES;
+
+    bool privateWriteAllowed=false;
+    int privateWriteError=0;
+    int dir=notes_fd(); /* SAME protected Documents root as real note ops. */
+    if(dir<0)privateWriteError=errno?errno:EACCES;
+    else {
+        char name[64];
+        int n=snprintf(name,sizeof(name),"bbx-test-isolation-%ld.txt",
+                       (long)getpid());
+        if(n<=0 || n>=(int)sizeof(name))privateWriteError=EINVAL;
+        else {
+            int out=openat(dir,name,O_WRONLY|O_CREAT|O_EXCL|
+                            O_NOFOLLOW|O_CLOEXEC,0600);
+            if(out<0)privateWriteError=errno;
+            else {
+                const char data[]="synthetic-isolation-test";
+                ssize_t written=write(out,data,sizeof(data)-1);
+                int writeError=written==(ssize_t)(sizeof(data)-1)?0:errno;
+                if(writeError==0 && fsync(out)<0)writeError=errno;
+                if(close(out)<0 && writeError==0)writeError=errno;
+                int removed=unlinkat(dir,name,0);
+                if(removed<0 && writeError==0)writeError=errno;
+                privateWriteAllowed=writeError==0&&removed==0;
+                privateWriteError=writeError;
+            }
+        }
+        close(dir);
+    }
+    xpc_dictionary_set_bool(reply,"hostFileDenied",fileDenied);
+    xpc_dictionary_set_int64(reply,"hostFileErrno",fileError);
+    xpc_dictionary_set_bool(reply,"networkDenied",networkDenied);
+    xpc_dictionary_set_int64(reply,"networkErrorNumber",networkError);
+    // Retain existing fixed probe response schema for the independent
+    // verifier; this positive check writes into worker's private Documents
+    // scratch directory, *not* the OS temporary directory.
+    xpc_dictionary_set_bool(reply,"temporaryWriteAllowed",privateWriteAllowed);
+    xpc_dictionary_set_int64(reply,"temporaryWriteErrno",privateWriteError);
+    xpc_dictionary_set_int64(reply,"workerPID",(int64_t)getpid());
+    xpc_dictionary_set_bool(reply,"valid",true);
+finish:
+    xpc_connection_send_message(peer,reply);
+    xpc_release(reply);
+}
+#endif
+
 static void message(xpc_connection_t peer,xpc_object_t incoming) {
+#ifdef BBX_TEST_NOTES_ISOLATION
+    const char *method=xpc_dictionary_get_string(incoming,"method");
+    if(method && strcmp(method,"probe")==0){
+        isolation_probe(peer,incoming);
+        return;
+    }
+#endif
     xpc_object_t response=xpc_dictionary_create_reply(incoming);
     if(!response)return;
     xpc_dictionary_set_bool(response,"ok",false);

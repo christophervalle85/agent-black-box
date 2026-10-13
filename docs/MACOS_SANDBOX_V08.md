@@ -316,3 +316,16 @@ The fail-closed `PeerRequirementGate.h` helper resolves Apple's runtime enforcem
 
 Mac observation: `security find-identity -v -p codesigning` found **zero currently valid identities**. Accordingly, no real Developer ID positive test can be accepted here. Apple Developer Program membership can eventually support separate [Apple Distribution (App Store)](https://developer.apple.com/help/account/certificates/certificates-overview/) and [Developer ID (outside Store)](https://developer.apple.com/developer-id/) workflows.
 
+
+## Phase 4 — AuthorityNotesService-derived OS-denial acceptance (on-device pending)
+
+After the accepted native XPC same-team **negative** peer result, I added a second independent Mac fixture that compiles the **`AuthorityNotesService.m` implementation itself**, rather than accepting OS-denial results from a separate generic `ProbeService.c`. The disposable worker is built with `BBX_TEST_NOTES_ISOLATION=1` to permit *one* read-only synthetic isolation diagnostic method; the ordinary worker is **not** compiled with this macro and retains its original fixed `workspace_info`, `write_note`, `read_note`, and `cleanup_test_note` interface. A one-purpose `ProbeHost.c` variant contacts the Authority worker identity only in the experimental build.
+
+```sh
+MCP_SANDBOX=off npm run mcp:mac-xpc-notes-isolation
+```
+
+Acceptance requires a baseline **host-readable synthetic home-directory file**, a verified **live reachable loopback listener**, an independently entitled ad-hoc-signed XPC worker with a different PID, an actual **`EPERM`/`EACCES` denial** opening the host marker, and an actual **`EPERM`/`EACCES` denial** attempting the reachable TCP loopback. `ENOENT`, `ECONNREFUSED`, missing messages, worker death and timeouts cannot count as sandbox successes. The positive storage check fsyncs and removes an exclusive synthetic note using **the notes worker's existing private Documents scratch directory** via `notes_fd()`; it does not grant any arbitrary filesystem access.
+
+This is an **instrumented build of the actual notes-worker source**, not a byte-identical production release binary. The test macro and ad-hoc signing must never be present in release artifacts. Static Developer ID/Team ID trust, live positive host ↔ worker identity authentication, notarization as appropriate, explicit user-approved document import/export and macOS `MCP_SANDBOX=required` remain incomplete. This fixture does not grant approval to merge the PR.
+
