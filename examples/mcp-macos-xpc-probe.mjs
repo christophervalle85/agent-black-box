@@ -98,7 +98,7 @@ async function main(){
       [service,'ProbeService.c','sandboxed XPC service']
     ]) {
       check('/usr/bin/xcrun',['clang','-std=c11','-fblocks','-O2','-Wall','-Wextra','-o',exe,
-        join(sources,src),'-lxpc'],label+' compilation',120000);
+        join(sources,src)],label+' compilation',120000);
     }
     check('/usr/bin/codesign',['--force','--sign','-','--options','runtime',
       '--identifier','dev.agentblackbox.xpc-probe.worker',

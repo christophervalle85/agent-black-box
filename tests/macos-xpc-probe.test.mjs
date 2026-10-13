@@ -26,3 +26,9 @@ test('XPC private service bundle has correct package type and distinct ID',()=>{
  assert.match(x,/<key>XPCService<\/key>/);
  assert.match(h,/dev\.agentblackbox\.xpc-probe\.host/);
 });
+
+test('XPC C code links against macOS libSystem, not unavailable standalone -lxpc',()=>{
+ const script=readFileSync(new URL('../examples/mcp-macos-xpc-probe.mjs',import.meta.url),'utf8');
+ assert.doesNotMatch(script, /['\"]-lxpc['\"]/);
+ assert.match(script, /join\(sources,src\)\],label\+' compilation'/);
+});

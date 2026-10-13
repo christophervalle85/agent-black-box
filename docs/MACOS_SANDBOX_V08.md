@@ -87,6 +87,8 @@ To test on macOS (requires Xcode Clang):
 npm run mcp:mac-xpc-probe
 ```
 
+Apple's [Creating XPC Services](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingXPCServices.html) describes the C XPC Services API as **libSystem-level**. Xcode's macOS SDK does not expose the separate linker target `-lxpc`; Clang links libSystem by default. The first on-device attempt stopped before executing the service with `ld: library 'xpc' not found`. The build now omits the incorrect `-lxpc` flag. This is a build-system correction, **not** an App Sandbox or XPC runtime PASS.
+
 The harness builds and signs a disposable host `.app` and nested `.xpc`, checks the nested signature/entitlement, starts a reachable loopback server, verifies an unrelated marker is host-readable, and requests one XPC diagnostic. Four outcomes must pass: separate process PID, permission-denied host file, permission-denied loopback TCP, and an allowed temporary-file write/cleanup in the service. Any failure (including XPC connection invalidation, timeout, or missing sandbox denial) fails closed and prints bounded diagnostics.
 
 **Not yet the production worker:** the service currently accepts only a synthetic test operation, not `read_note` or `write_note`. The Node gateway still uses the bundled Node MCP notes executable, and `MCP_SANDBOX=required` on macOS remains unsupported/fail-closed. Only after native XPC acceptance do we design the bounded, authorization-checked Node→host→XPC request bridge, secure workspace provisioning, and real MCP read/write tests. Build-system and signing policy remain experimental; an Xcode project may be preferable to manual app packaging for shipping.
