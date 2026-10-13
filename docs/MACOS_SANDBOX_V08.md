@@ -243,6 +243,21 @@ This is a *partial, specifically scoped cancellation property*, **not** an assur
 
 References: [MCP 2026-07-28 Cancellation](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/patterns/cancellation.mdx) requires stdio cancellation notifications and recommends no response to cancelled requests. Apple's [xpc_connection_cancel](https://developer.apple.com/documentation/xpc/xpc_connection_cancel%28_%3A%29) is **asynchronous and non-preemptive**: cancelling a host-side connection does not stop a running XPC worker handler. Full Phase 3E and macOS required-mode acceptance therefore remain blocked on a controlled in-progress native worker cancellation test.
 
+### Phase 3E in-flight diagnostic — new on-device gate (not yet accepted)
+
+The earlier Phase 3E **post-commit** scenario passed on my Mac on October 13, 2026: all nine PASS lines, including native host termination, preserved synthetic committed note, authenticated `MCP_OUTCOME_UNKNOWN` record and no unsandboxed fallback. This proves **post-commit host process supervision**, not that execution within an XPC worker was aborted.
+
+I added a separate opt-in **`--during`** path to the same synthetic-only cancellation harness. This mode uses a distinct `bbx-test-cancel-during-*.txt` note. The worker asynchronously executes a bounded delay and creates a **content-free marker in its own private Documents scratch directory** after entering native work. The harness waits for the real worker-owned marker, verifies that the target note has not yet been created, and issues MCP `notifications/cancelled` while the operation is active. The native host should die, its XPC peer should become invalid, and the experimental worker observes that invalidation on a separate event queue and cooperatively aborts its delayed write. The harness asserts removal of the worker marker, absence of the target note, `MCP_OUTCOME_UNKNOWN` in a verified HMAC audit, no false client response and no fallback.
+
+**Mac commands, after updating the feature branch:**
+
+```sh
+MCP_SANDBOX=off npm run mcp:mac-xpc-cancellation -- --during
+MCP_SANDBOX=off npm run mcp:mac-xpc-cancellation -- --during --modern
+```
+
+This experiment does not cancel arbitrary synchronous native worker operations. It specifically exercises a cooperative, asynchronous test hook; no production worker, signer trust or required-mode path is changed. Apple's [`xpc_connection_cancel` documentation](https://developer.apple.com/documentation/xpc/xpc_connection_cancel%28_%3A%29) says cancellation is asynchronous and **non-preemptive**; Apple's [synchronous reply API](https://developer.apple.com/documentation/xpc/xpc_connection_send_message_with_reply_sync%28_%3A_%3A%29) can block indefinitely. The modern [MCP stdio transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports) continues to use `notifications/cancelled` on shared stdio connections; per-request Streamable HTTP differs. Treat all dispatch-time transport loss as UNKNOWN until an externally verifiable commit/abort outcome exists. Do not declare full Phase 3E or `MCP_SANDBOX=required` accepted based on this test alone.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

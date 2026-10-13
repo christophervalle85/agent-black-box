@@ -9,7 +9,7 @@
 import {PassThrough} from 'node:stream';
 import {spawn,spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {copyFileSync,mkdirSync,mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {copyFileSync,mkdirSync,mkdtempSync,readFileSync,rmSync,existsSync} from 'node:fs';
 import {tmpdir,homedir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -23,9 +23,12 @@ import {validateMacWorkspaceBinding} from '../src/macos-workspace-binding.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const sources=join(root,'native','macos','xpc');
 const args=process.argv.slice(2);
-if(args.some(arg=>arg!=='--modern')||args.filter(arg=>arg==='--modern').length>1)
-  throw Error('Usage: npm run mcp:mac-xpc-mcp-acceptance [-- --modern]');
+if(args.some(arg=>!['--modern','--during'].includes(arg)) ||
+   args.filter(arg=>arg==='--modern').length>1 ||
+   args.filter(arg=>arg==='--during').length>1)
+  throw Error('Usage: npm run mcp:mac-xpc-cancellation [-- --modern] [-- --during]');
 const modernMode=args.includes('--modern');
+const duringMode=args.includes('--during');
 const MODERN='2026-07-28';
 const META=Object.freeze({
   'io.modelcontextprotocol/protocolVersion':MODERN,
@@ -128,7 +131,7 @@ async function main(){
   const host=join(app,'Contents','MacOS','BlackBoxCancelHost');
   const bundle=join(app,'Contents','XPCServices','BlackBoxCancelWorker.xpc');
   const worker=join(bundle,'Contents','MacOS','BlackBoxCancelWorker');
-  let controller, gateway, client, input, output, syntheticName=null, nativeRoot=null;
+  let controller, gateway, client, input, output, syntheticName=null, syntheticMarker=null, nativeRoot=null;
   try{
     mkdirSync(dirname(host),{recursive:true});
     mkdirSync(dirname(worker),{recursive:true});
@@ -167,7 +170,7 @@ async function main(){
     const testEnv={MCP_WORKSPACE_ROOT:nativeRoot,MCP_AUDIT_FILE:auditFile,
       MCP_CONTROLLER_PORT:String(port),MCP_TOKEN_FILE:controller.tokenFile,
       MCP_SANDBOX:'off'};
-    const cancellationReady=join(directory,'native-cancel-committed.pid');
+    const cancellationReady=join(directory,duringMode?'native-cancel-started.pid':'native-cancel-committed.pid');
     const childEnv={PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C.UTF-8',
       MCP_SANDBOX:'off',BLACKBOX_EXPERIMENTAL_XPC_HOST:host,
       BLACKBOX_WORKSPACE_ROOT:nativeRoot,
@@ -212,9 +215,13 @@ async function main(){
       throw Error('Modern list response omitted MCP server attribution.');
     console.log('PASS: '+(modernMode?'Modern':'Legacy')+' MCP gateway discovers only allowlisted native note tools.');
 
-    const name='bbx-test-cancel-after-'+randomUUID().slice(0,8)+'.txt';
+    const nonce=randomUUID().slice(0,8);
+    const name='bbx-test-cancel-'+(duringMode?'during-':'after-')+nonce+'.txt';
     syntheticName=name;
-    const contents='Synthetic cancelled MCP write committed before native host responded.';
+    if(duringMode)syntheticMarker='bbx-test-cancel-running-'+nonce+'.txt';
+    const contents=duringMode
+      ?'Synthetic worker-cancel test: content must not be committed.'
+      :'Synthetic cancelled MCP write committed before native host responded.';
     const issued=request('tools/call',{
       name:'write_note',arguments:{path:name,content:contents}
     });
@@ -225,27 +232,39 @@ async function main(){
       throw Error('MCP cancellation approval was not for exact synthetic write.');
     await decide(port,approval.id,'approve');
 
-    // The dedicated native host emits a PID-only marker on stderr AFTER
-    // the private XPC worker has replied success; it is then intentionally
-    // suspended awaiting SIGKILL from its supervising downstream adapter.
+    // Post-commit: native host emits its PID after service acknowledgement.
+    // In-flight: host emits its PID before dispatch and the XPC worker
+    // creates a separate private marker only after execution begins.
     const readySince=Date.now();
     let nativePid=0;
     while(Date.now()-readySince<7000){
       try{
         nativePid=Number(readFileSync(cancellationReady,'utf8').trim());
-        if(Number.isSafeInteger(nativePid)&&nativePid>0)break;
+        if(Number.isSafeInteger(nativePid)&&nativePid>0 &&
+           (!duringMode || (existsSync(join(nativeRoot,syntheticMarker)) &&
+             readFileSync(join(nativeRoot,syntheticMarker),'utf8')==='worker-running\n')))
+          break;
       }catch(error){if(error.code!=='ENOENT')throw error;}
       await new Promise(r=>setTimeout(r,40));
     }
     if(!Number.isSafeInteger(nativePid)||nativePid<=0)
-      throw Error('Native post-commit cancellation marker was not observed.');
+      throw Error('Native cancellation host PID marker was not observed.');
     const aliveBefore=command('/bin/ps',['-o','stat=','-p',String(nativePid)],'Check native host before cancel');
     if(!aliveBefore.stdout.trim()||aliveBefore.stdout.trim().startsWith('Z'))
       throw Error('Native host already exited before cancellation.');
-    console.log('PASS: Native host remained alive after committed XPC write, before MCP cancellation.');
+    if(duringMode) {
+      if(!existsSync(join(nativeRoot,syntheticMarker)))
+        throw Error('XPC service execution marker disappeared before cancellation.');
+      if(existsSync(join(nativeRoot,name)))
+        throw Error('In-flight worker already created note before cancellation.');
+      console.log('PASS: Real XPC worker was executing before MCP cancellation; note not yet created.');
+    }else{
+      console.log('PASS: Native host remained alive after committed XPC write, before MCP cancellation.');
+    }
 
     client.notify('notifications/cancelled',{requestId:issued.requestId,
-      reason:'Synthetic-only post-commit cancellation acceptance.'});
+      reason:duringMode?'Synthetic in-flight worker cancellation acceptance.':
+        'Synthetic-only post-commit cancellation acceptance.'});
 
     // After cancellation, the gateway terminates its downstream adapter.
     // The adapter MUST terminate its independent native host process group.
@@ -261,12 +280,25 @@ async function main(){
     if(!disappeared)throw Error('Cancelled MCP request left a running native host process.');
     console.log('PASS: MCP cancellation terminated the outstanding native host process.');
 
-    // The native file was committed *before* the cancellation. It must not
-    // be silently discarded, re-created or treated as a denied write.
-    const committed=await nativeResult(host,frameBridgeRequest('READ',name));
-    if(!committed.ok||committed.content!==contents)
-      throw Error('Committed XPC synthetic note absent after cancellation.');
-    console.log('PASS: Post-cancellation inspection found the already committed synthetic note.');
+    if(duringMode){
+      // Invalidation is cooperative. The separate worker queue checks a
+      // per-peer cancellation latch and removes its own execution marker.
+      const started=Date.now();
+      while(existsSync(join(nativeRoot,syntheticMarker))&&Date.now()-started<6500)
+        await new Promise(r=>setTimeout(r,40));
+      if(existsSync(join(nativeRoot,syntheticMarker)))
+        throw Error('XPC worker never completed cooperative cancellation.');
+      const absent=await nativeResult(host,frameBridgeRequest('READ',name));
+      if(absent.ok||existsSync(join(nativeRoot,name)))
+        throw Error('XPC worker committed a synthetic note after cancellation.');
+      console.log('PASS: XPC worker observed lost peer, exited in-flight work and did not create note.');
+    }else{
+      // The native file committed *before* cancellation. Never imply rollback.
+      const committed=await nativeResult(host,frameBridgeRequest('READ',name));
+      if(!committed.ok||committed.content!==contents)
+        throw Error('Committed XPC synthetic note absent after cancellation.');
+      console.log('PASS: Post-cancellation inspection found the already committed synthetic note.');
+    }
 
     const auditSince=Date.now();
     let uncertainEvents=[];
@@ -293,8 +325,12 @@ async function main(){
       throw Error('Gateway used unexpected downstream after cancellation.');
     console.log('PASS: Gateway refuses new native requests after cancelling its downstream.');
 
-    console.log('PASS: Experimental MCP cancellation and native supervision accepted (synthetic-only).');
-    console.log('NOTE: XPC work already completed before cancel; mid-execution XPC cancellation remains unproven.');
+    console.log('PASS: Experimental '+(duringMode?'in-flight XPC worker':'post-commit')+
+      ' cancellation acceptance (synthetic-only).');
+    if(!duringMode)
+      console.log('NOTE: XPC work already completed before cancel; run --during for the in-flight experiment.');
+    else
+      console.log('NOTE: Cooperative cancellation is only demonstrated for this instrumented test worker, not production writes.');
   }finally{
     if(gateway)gateway.close();
     if(client)client.close();
@@ -302,6 +338,9 @@ async function main(){
     if(output)output.end();
     if(syntheticName&&nativeRoot){
       try{await nativeResult(host,frameBridgeRequest('REMOVE',syntheticName));}catch{}
+    }
+    if(syntheticMarker&&nativeRoot){
+      try{await nativeResult(host,frameBridgeRequest('REMOVE',syntheticMarker));}catch{}
     }
     if(controller){
       controller.approvalQueue.close();

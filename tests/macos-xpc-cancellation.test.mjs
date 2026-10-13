@@ -70,3 +70,16 @@ test('synthetic mid-execution cancellation can invalidate XPC peer while backgro
   assert.match(adapter,/COMMITTED\|STARTED/);
   assert.doesNotMatch(ordinary,/bbx-test-cancel-during-|worker-running/);
 });
+
+test('the in-flight native MCP fixture proves service entry, worker abort and HMAC uncertainty',()=>{
+  const script=file('../examples/mcp-macos-xpc-cancellation.mjs');
+  assert.match(script,/args\.includes\('--during'\)/);
+  assert.match(script,/bbx-test-cancel-running-/);
+  assert.match(script,/worker-running/);
+  assert.match(script,/Real XPC worker was executing before MCP cancellation/);
+  assert.match(script,/XPC worker observed lost peer/);
+  assert.match(script,/MCP_OUTCOME_UNKNOWN/);
+  assert.match(script,/controller\.store\.verify\(\)/);
+  assert.match(script,/Gateway used unexpected downstream after cancellation/);
+  assert.match(script,/MCP_SANDBOX:'off'/);
+});
