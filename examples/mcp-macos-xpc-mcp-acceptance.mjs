@@ -1,5 +1,5 @@
 /**
- * v0.8 Phase 3A: opt-in, real macOS-only MCP→policy→approval→signed
+ * v0.8 Phase 3A/3B: opt-in, real macOS-only MCP→policy→approval→signed
  * native host→private XPC worker→audit acceptance using SYNTHETIC notes.
  *
  * This test is not MCP_SANDBOX=required and is not a production gateway
@@ -22,6 +22,17 @@ import {validateMacWorkspaceBinding} from '../src/macos-workspace-binding.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const sources=join(root,'native','macos','xpc');
+const args=process.argv.slice(2);
+if(args.some(arg=>arg!=='--modern')||args.filter(arg=>arg==='--modern').length>1)
+  throw Error('Usage: npm run mcp:mac-xpc-mcp-acceptance [-- --modern]');
+const modernMode=args.includes('--modern');
+const MODERN='2026-07-28';
+const META=Object.freeze({
+  'io.modelcontextprotocol/protocolVersion':MODERN,
+  'io.modelcontextprotocol/clientCapabilities':{},
+  'io.modelcontextprotocol/clientInfo':{name:'native-xpc-modern-acceptance',version:'0.8.0'}
+});
+const modern=params=>({...params,_meta:{...META}});
 function command(tool,args,label,timeout=90000) {
   const r=spawnSync(tool,args,{encoding:'utf8',timeout,maxBuffer:128*1024});
   if(r.error||r.status!==0)
@@ -108,7 +119,7 @@ async function decide(port,id,decision){
   if(r.status!==200)throw Error('Dashboard approval decision endpoint returned '+r.status);
 }
 async function main(){
-  if(process.platform!=='darwin')throw Error('Phase 3A requires real macOS.');
+  if(process.platform!=='darwin')throw Error('Phase 3A/3B requires real macOS.');
   if(process.env.MCP_SANDBOX==='required')
     throw Error('MCP_SANDBOX=required is NOT available on macOS; no fallback.');
   command('/usr/bin/xcrun',['--find','clang'],'Native Xcode compiler');
@@ -164,17 +175,42 @@ async function main(){
       args:[join(root,'examples','mcp-macos-xpc-mcp-downstream.mjs')],
       env:childEnv,description:'EXPERIMENTAL native XPC synthetic-only acceptance'
     }});
-    const initialization=await client.send('initialize',{protocolVersion:'2025-11-25',
-      capabilities:{},clientInfo:{name:'native-integration-test',version:'0.8.0'}});
-    if(initialization.result?.protocolVersion!=='2025-11-25')
-      throw Error('Experimental real MCP initialization failed.');
-    client.notify('notifications/initialized');
-    const listed=await client.send('tools/list',{});
+    // Real client-visible MCP calls use the same gateway and downstream.
+    // Modern requests carry per-request metadata; no legacy handshake.
+    const request=(method,params={})=>client.send(method,
+      modernMode?modern(params):params);
+    if(modernMode) {
+      const wrong=await client.send('server/discover',{
+        _meta:{...META,'io.modelcontextprotocol/protocolVersion':'2099-01-01'}
+      });
+      if(wrong.error?.code!==-32022)
+        throw Error('Modern unknown protocol version was not rejected.');
+      const discover=await request('server/discover',{});
+      if(discover.result?.supportedVersions?.join(',')!==MODERN ||
+         discover.result?.resultType!=='complete' ||
+         discover.result?.cacheScope!=='private' ||
+         discover.result?.ttlMs!==0)
+        throw Error('Native-backed modern MCP discovery or metadata invalid.');
+      const missing=await client.send('tools/list',{});
+      if(missing.error?.code!==-32602)
+        throw Error('Modern MCP requests missing metadata were unexpectedly allowed.');
+      console.log('PASS: Modern MCP discovery/version/missing-metadata fail-closed checks.');
+    }else{
+      const initialization=await client.send('initialize',{protocolVersion:'2025-11-25',
+        capabilities:{},clientInfo:{name:'native-integration-test',version:'0.8.0'}});
+      if(initialization.result?.protocolVersion!=='2025-11-25')
+        throw Error('Experimental legacy MCP initialization failed.');
+      client.notify('notifications/initialized');
+    }
+    const listed=await request('tools/list',{});
     if(listed.result?.tools?.map(x=>x.name).join(',')!=='read_note,write_note')
       throw Error('Gateway advertised an unexpected native tool interface.');
-    console.log('PASS: Real MCP gateway discovers only allowlisted native note tools.');
+    if(modernMode&&(listed.result.resultType!=='complete'||
+       listed.result._meta?.['io.modelcontextprotocol/serverInfo']?.name!=='agent-black-box-gateway'))
+      throw Error('Modern list response omitted MCP server attribution.');
+    console.log('PASS: '+(modernMode?'Modern':'Legacy')+' MCP gateway discovers only allowlisted native note tools.');
 
-    const credential=await client.send('tools/call',
+    const credential=await request('tools/call',
       {name:'read_note',arguments:{path:'../.ssh/id_ed25519'}});
     if(credential.result?.isError!==true||!credential.result.content[0].text.includes('DENY_PATH_ESCAPE'))
       throw Error('Gateway did not block native path traversal.');
@@ -183,7 +219,7 @@ async function main(){
     syntheticName='bbx-test-mcp-'+randomUUID().replaceAll('-','').slice(0,12)+'.txt';
     const content='Native XPC approved synthetic note '+randomUUID().slice(0,8);
     const deniedName='bbx-test-mcp-'+randomUUID().replaceAll('-','').slice(0,12)+'.txt';
-    const deniedCall=client.send('tools/call',
+    const deniedCall=request('tools/call',
       {name:'write_note',arguments:{path:deniedName,content:'must never exist'}});
     const reviewDenied=await pendingApproval(controller);
     if(reviewDenied.filename!==deniedName)throw Error('Denied review filename mismatch.');
@@ -194,7 +230,7 @@ async function main(){
       throw Error('Denied note was present in the sandbox.');
     console.log('PASS: Real controller denial prevents native XPC note creation.');
 
-    const acceptedCall=client.send('tools/call',{
+    const acceptedCall=request('tools/call',{
       name:'write_note',arguments:{path:syntheticName,content}
     });
     const review=await pendingApproval(controller);
@@ -206,14 +242,14 @@ async function main(){
     const accepted=await acceptedCall;
     if(accepted.result?.isError===true||!accepted.result?.content)
       throw Error('Approved MCP write failed.');
-    const readback=await client.send('tools/call',{
+    const readback=await request('tools/call',{
       name:'read_note',arguments:{path:syntheticName}
     });
     if(readback.result?.isError||readback.result?.content?.[0]?.text!==content)
       throw Error('Approved MCP readback did not return exact native note contents.');
     console.log('PASS: Approved MCP write and read execute through private XPC worker.');
 
-    const duplicateCall=client.send('tools/call',{
+    const duplicateCall=request('tools/call',{
       name:'write_note',arguments:{path:syntheticName,content:'overwrite attempted'}
     });
     const duplicateReview=await pendingApproval(controller);
@@ -232,7 +268,8 @@ async function main(){
       !audit.includes('DENY_PATH_ESCAPE'))
       throw Error('Fresh HMAC audit history incomplete or contains full note contents.');
     console.log('PASS: Fresh authenticated audit contains denials, approval and result without note contents.');
-    console.log('PASS: Experimental MCP→policy→approval→XPC→audit acceptance passed (synthetic-only).');
+    console.log('PASS: Experimental '+(modernMode?'modern':'legacy')+
+      ' MCP→policy→approval→XPC→audit acceptance passed (synthetic-only).');
     console.log('NOTE: This is NOT production macOS required-mode or independent code-signing attestation.');
   }finally{
     if(gateway)gateway.close();

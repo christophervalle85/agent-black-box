@@ -172,6 +172,22 @@ The acceptance scenario sends genuine **legacy MCP stdio JSON-RPC requests** to 
 - The acceptance uses an isolated disposable audit history rather than the real user's authentic historical events. It tests **legacy** MCP only; modern protocol and SDK interoperability through the native path need their own Mac runtime acceptance.
 - The native scratch Documents container persists across test invocations, but may retain synthetic orphan notes after abrupt termination. Never expose it as a real document workspace until lifecycle management, explicit import/export and cleanup are designed.
 
+### Phase 3B — Modern MCP 2026-07-28 over synthetic signed XPC notes (Mac acceptance pending)
+
+**Phase 3A on-device ACCEPTED:** The user ran `npm run mcp:mac-xpc-mcp-acceptance` on Apple Silicon and confirmed the real legacy MCP gateway executes policy checks, operator approval/denial, bounded private XPC note writes and reads, exclusive-create enforcement, and disposable authenticated audit history without recording note contents. This is **synthetic-only** acceptance, not production required-mode or native signer identity attestation.
+
+A new opt-in mode of the **same** acceptance harness reuses the real native host, signed XPC service, local approval controller, private Documents workspace and throwaway audit log:
+
+```sh
+npm run mcp:mac-xpc-mcp-modern
+```
+
+This mode uses real **modern MCP `2026-07-28` client-visible request metadata**, `server/discover`, metadata-preserving `tools/list`/`tools/call`, `resultType:complete` and private/no-cache response semantics. It explicitly rejects an unknown protocol version (`-32022`) and missing modern metadata (`-32602`) before any native tool call. It then repeats the real gateway path-traversal refusal, controller-denied write, approval-gated new note, exact XPC readback, approved-but-rejected duplicate write, and verification of a **fresh HMAC audit history** free of full note contents.
+
+The downstream test adapter continues to speak the previously validated **legacy 2025-11-25** protocol **only between the gateway and its fixed XPC adapter**. This matches the gateway's actual protocol translation architecture: the external client uses modern MCP, while the gateway pins its audited downstream to a legacy interface. This test uses the same synthetic note namespace, never the user's live notes or authentic audit/checkpoint files.
+
+**Not yet production:** On-device native modern test is pending; failures in cancellation, native worker termination, crash recovery, status unknown, signer trust, final OS denial on the exact service, or explicit user document import/export still block `MCP_SANDBOX=required` on macOS. The normal `npm run mcp` launch is unchanged and cannot select this test path via an environment variable. This is a test-only in-process hook in `MCP_SANDBOX=off` mode.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

@@ -32,7 +32,8 @@
     "mcp:mac-xpc-node-bridge": "node examples/mcp-macos-xpc-node-bridge.mjs",
     "mcp:mac-xpc-durable": "node examples/mcp-macos-xpc-durable.mjs",
     "mcp:mac-xpc-authority": "node examples/mcp-macos-xpc-authority.mjs",
-    "mcp:mac-xpc-mcp-acceptance": "node examples/mcp-macos-xpc-mcp-acceptance.mjs"
+    "mcp:mac-xpc-mcp-acceptance": "node examples/mcp-macos-xpc-mcp-acceptance.mjs",
+    "mcp:mac-xpc-mcp-modern": "node examples/mcp-macos-xpc-mcp-acceptance.mjs --modern"
   },
   "license": "MIT"
 }
