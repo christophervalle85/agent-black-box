@@ -243,6 +243,25 @@ async function main(){
 
     // Ensure the real HMAC ledger explicitly marks both operations uncertain,
     // not success and not a confident rejection or rollback.
+    controller.store.verify();
+    const records=readFileSync(auditFile,'utf8').trim().split('\n').map(x=>JSON.parse(x));
+    const uncertain=records.filter(x=>x.ruleId==='MCP_OUTCOME_UNKNOWN'&&x.outcome==='error');
+    if(uncertain.length!==2 ||
+       records.some(x=>x.summary?.includes('Tool completed')) ||
+       records.some(x=>x.ruleId==='MCP_OUTCOME_UNKNOWN'&&x.outcome==='success'))
+      throw Error('Faulted native writes did not produce two explicit unknown-outcome audit events.');
+    if(records.some(x=>JSON.stringify(x).includes(hangContent)||JSON.stringify(x).includes(crashContent)))
+      throw Error('Synthetic note contents unexpectedly included in the fault audit.');
+    console.log('PASS: Verified HMAC audit records both native write outcomes as UNKNOWN, without contents.');
+
+    // A normal read proves the gateway/adapter survived the host failures.
+    const readBack=await request('tools/call',{
+      name:'read_note',arguments:{path:crash}
+    });
+    if(readBack.result?.isError||readBack.result?.content?.[0]?.text!==crashContent)
+      throw Error('Healthy native read after fault was unavailable.');
+    console.log('PASS: Native MCP read remains available after isolated host failures.');
+
     console.log('PASS: Experimental MCP native-host timeout/crash acceptance passed (synthetic-only).');
     console.log('NOTE: No real XPC service crash, cancellation or production required-mode proved.');
   }finally{

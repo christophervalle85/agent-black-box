@@ -20,7 +20,7 @@ const names=Object.freeze([
 ]);
 const host=process.env.BLACKBOX_EXPERIMENTAL_XPC_HOST;
 const EXAMPLE_ERA='2025-11-25';
-const nativeTimeout=process.env.BLACKBOX_XPC_TEST_FAULT==='1'?750:8500;
+const nativeTimeout=process.env.BLACKBOX_XPC_TEST_FAULT==='1'?2500:8500;
 let initialized=false;
 let ended=false;
 const send=(id,result)=>sendJsonLine(process.stdout,{jsonrpc:'2.0',id,result});
