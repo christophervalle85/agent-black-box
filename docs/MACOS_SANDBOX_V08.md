@@ -57,6 +57,24 @@ After reproducing the failure, run `npm run mcp:mac-crash` on the Mac to summari
 
 **Architectural recommendation:** regardless of this ad-hoc standalone CLI failure, favor a bundled XPC service with independently configured permissions and `launchd` lifecycle for the actual MCP tool worker, following [Apple's XPC documentation](https://developer.apple.com/documentation/xpc). Do not add `com.apple.security.inherit` to a standalone process launched by an unsandboxed Node parent: inheritance cannot create a protected parent context. Never disable SIP or Gatekeeper for this project.
 
+### Phase-1b: sign the same probe inside a macOS .app bundle (experimental)
+
+The **confirmed crash** (`EXC_BREAKPOINT / SIGTRAP`, signal 5, faulting frame `_libsecinit_appsandbox.cold.6`) occurred during system-library sandbox initialization, before Swift's entrypoint. The report does **not** identify `SYSCALL_SET_PROFILE` or prove whether Node's parent sandbox or missing bundle metadata is the primary cause. Apple's [entitlement inheritance guidance](https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html) and [Apple Developer Technical Support notes](https://developer.apple.com/forums/thread/679940) explain why an inherited-versus-new-sandbox conflict can trap, but that is not a conclusive diagnosis for the standalone test.
+
+The next low-risk differentiation is:
+
+```sh
+npm run mcp:mac-bundle-probe
+```
+
+This compiles **the same Swift logic** within a disposable `BlackBoxSandboxProbe.app/Contents/MacOS` structure, provides an explicit `Info.plist` application identifier, and ad-hoc signs **the bundle**, not just a loose executable. The Node harness still launches the bundled executable and verifies OS permissions; signing or a successful launch alone never counts as a PASS. This helps determine whether standard bundle packaging changes behavior, but it **is not an XPC service**, a registered LaunchServices test, or a reliable production macOS security boundary.
+
+Results:
+- If the three actual file/network/container checks pass, proceed to a separately sandboxed XPC worker and end-to-end MCP integration.
+- If it still traps in `libsystem_secinit`, do **not** add `com.apple.security.inherit` to the unsandboxed Node process's child and claim success. Use the Xcode XPC Service template within a native host app for a supported `launchd`-managed separation, then repeat real isolation tests.
+
+The test deletes the temporary `.app` bundle and synthetic host marker. macOS may retain its system-created sandbox container under `~/Library/Containers/dev.agentblackbox.sandbox-probe.bundle`; do not delete arbitrary containers by script.
+
 ## Phase 2 — native XPC worker architecture (not yet implemented)
 
 - Build a dedicated sandboxed XPC service inside a minimal signed macOS host app, separated from the existing unsandboxed Node control plane. Model its IPC as a fixed set of `read_note`/`write_note` operations; never forward arbitrary tool names, paths, file descriptors or commands.

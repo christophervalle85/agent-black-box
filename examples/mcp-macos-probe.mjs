@@ -6,7 +6,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { connect, createServer } from 'node:net';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,6 +81,11 @@ async function endpoint() {
 }
 async function main() {
   if(process.platform!=='darwin')throw Error('The native App Sandbox feasibility test requires macOS. Linux/Windows are not equivalent.');
+  // App Sandbox feasibility variations are opt-in and NEVER enable MCP required mode.
+  const options=process.argv.slice(2);
+  if(options.length>1 || (options.length===1 && options[0]!=='--bundle'))
+    throw Error('Usage: npm run mcp:mac-probe [-- --bundle]');
+  const bundled=options[0]==='--bundle';
   const swift=success('/usr/bin/xcrun',['--find','swiftc'],{title:'Apple Swift compiler lookup'}).stdout.trim();
   console.log('Swift compiler available: '+swift);
   const temporary=mkdtempSync(join(tmpdir(),'agent-black-box-macos-probe-'));
@@ -88,13 +93,28 @@ async function main() {
   const privateFile=join(privateDir,'user-owned-marker.txt');
   let server;
   try {
-    const executable=join(temporary,exeName);
+    const app=join(temporary,'BlackBoxSandboxProbe.app');
+    const executable=bundled?join(app,'Contents','MacOS',exeName):join(temporary,exeName);
+    if(bundled) {
+      mkdirSync(dirname(executable),{recursive:true});
+      copyFileSync(join(native,'SandboxProbe-Info.plist'),join(app,'Contents','Info.plist'));
+      console.log('Probe packaging: signed macOS .app bundle (experimental; no XPC yet).');
+    } else {
+      console.log('Probe packaging: signed standalone CLI (known SIGTRAP on this Mac).');
+    }
     writeFileSync(privateFile,'test marker: NOT a real credential\n',{mode:0o600});
     if(readFileSync(privateFile,'utf8').length<1)throw Error('Cannot read baseline host test file.');
     success('/usr/bin/xcrun',['swiftc','-O','-o',executable,join(native,'SandboxProbe.swift')],{title:'Swift compilation',timeout:120000});
-    success('/usr/bin/codesign',['--force','--sign','-','--options','runtime','--identifier','dev.agentblackbox.sandbox-probe',
-      '--entitlements',join(native,'SandboxProbe.entitlements'),executable],{title:'Local ad-hoc signing'});
-    ensureEntitlements(executable);
+    const identity=bundled?'dev.agentblackbox.sandbox-probe.bundle':'dev.agentblackbox.sandbox-probe';
+    const signingTarget=bundled?app:executable;
+    success('/usr/bin/codesign',['--force','--sign','-','--options','runtime','--identifier',identity,
+      '--entitlements',join(native,'SandboxProbe.entitlements'),signingTarget],{title:'Local ad-hoc signing'});
+    ensureEntitlements(signingTarget);
+    if(bundled) {
+      const metadata=success('/usr/libexec/PlistBuddy',['-c','Print :CFBundleIdentifier',join(app,'Contents','Info.plist')],{title:'Bundle identifier verification'});
+      if(metadata.stdout.trim()!==identity)throw Error('Signed app bundle ID does not match its Info.plist.');
+      console.log('PASS: Signed app bundle and declared application identifier match.');
+    }
     const listener=await endpoint();server=listener.server;
     const proof=await runNative(executable,['--probe',realpathSync(privateFile),String(listener.port)],{timeout:12000});
     if(proof.error||proof.status!==0||proof.signal||proof.timedOut||proof.outputExceeded) {
@@ -116,7 +136,7 @@ async function main() {
       }));
       throw Error('macOS isolation is NOT proven. Do not enable required sandbox mode.');
     }
-    console.log('PASS: Native macOS sandbox FEASIBILITY proven for the signed test executable only.');
+    console.log('PASS: Native macOS App Sandbox FEASIBILITY proven for this signed '+(bundled?'app-bundled executable':'standalone executable')+' only.');
     console.log('NOTE: The Node MCP downstream has NOT been isolated; production XPC implementation remains future work.');
   }finally {
     await new Promise(resolve=>server?server.close(resolve):resolve());
