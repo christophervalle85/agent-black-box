@@ -28,7 +28,7 @@ test('synthetic adapter tracks native hosts and kills their own process groups o
   assert.match(script,/process\.once\('exit',stopActiveNativeHosts\)/);
   assert.match(script,/nativeHosts\.add\(child\)/);
   assert.match(script,/nativeHosts\.delete\(child\)/);
-  assert.match(script,/BBX_CANCEL_COMMITTED_PID/);
+  assert.match(script,/BBX_CANCEL_\(\?:COMMITTED\|STARTED\)_PID/);
   assert.match(script,/writeFileSync\(readyFile/);
   assert.match(script,/flag:'wx'/);
 });
