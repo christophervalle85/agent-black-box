@@ -27,6 +27,8 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-fault-acceptance.mjs
       - run: node --check examples/mcp-macos-xpc-service-failure.mjs
       - run: node --check examples/mcp-macos-xpc-cancellation.mjs
+      - run: node --check examples/mcp-macos-signer-trust.mjs
+      - run: node --check src/macos-signer-trust.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

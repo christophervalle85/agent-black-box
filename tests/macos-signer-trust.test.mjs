@@ -57,7 +57,7 @@ test('only explicitly matching Developer ID and sandbox-only XPC worker can be a
 test('platform, identity, path and missing independently pinned Team ID all fail closed',()=>fixture(f=>{
   assert.throws(()=>verifyMacDistributionSigner({...f,platform:'linux',expectedTeamId:team,hostIdentifier:hostId,serviceIdentifier:workerId}),/macOS/);
   assert.throws(()=>verifyMacDistributionSigner({...f,platform:'darwin',hostIdentifier:hostId,serviceIdentifier:workerId}),/Team ID/);
-  assert.throws(()=>valid({...f,expectedTeamId:'evil'}),/Team ID/);
+  assert.throws(()=>verifyMacDistributionSigner({...f,platform:'darwin',expectedTeamId:'evil',hostIdentifier:hostId,serviceIdentifier:workerId}),/Team ID/);
   assert.throws(()=>valid({...f,service:join(f.app,'not-nested.xpc')}),/ENOENT|nested/);
   assert.throws(()=>valid({...f,serviceIdentifier:hostId}),/distinct/);
 }));

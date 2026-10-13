@@ -258,6 +258,32 @@ MCP_SANDBOX=off npm run mcp:mac-xpc-cancellation -- --during --modern
 
 This experiment does not cancel arbitrary synchronous native worker operations. It specifically exercises a cooperative, asynchronous test hook; no production worker, signer trust or required-mode path is changed. Apple's [`xpc_connection_cancel` documentation](https://developer.apple.com/documentation/xpc/xpc_connection_cancel%28_%3A%29) says cancellation is asynchronous and **non-preemptive**; Apple's [synchronous reply API](https://developer.apple.com/documentation/xpc/xpc_connection_send_message_with_reply_sync%28_%3A_%3A%29) can block indefinitely. The modern [MCP stdio transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports) continues to use `notifications/cancelled` on shared stdio connections; per-request Streamable HTTP differs. Treat all dispatch-time transport loss as UNKNOWN until an externally verifiable commit/abort outcome exists. Do not declare full Phase 3E or `MCP_SANDBOX=required` accepted based on this test alone.
 
+
+### Phase 3E accepted on-device; Phase 4 signer-trust diagnostic under development
+
+**October 13, 2026 Mac acceptance:** I ran all three synthetic Phase 3E cancellation scenarios, and each passed:
+
+- Legacy `npm run mcp:mac-xpc-cancellation -- --during`: XPC worker execution marker observed before cancelling, host terminated, cooperative abort prevented note creation, audit marked `MCP_OUTCOME_UNKNOWN`, no downstream fallback.
+- Modern `npm run mcp:mac-xpc-cancellation -- --during --modern`: the same native outcome with MCP `2026-07-28` discovery/metadata checks.
+- Legacy post-commit `npm run mcp:mac-xpc-cancellation`: already-committed note survived termination; authenticated audit reported uncertainty rather than an invented rollback.
+
+These are `MCP_SANDBOX=off` synthetic tests, not production preemption or fail-safe rollback.
+
+**Next diagnostic — trust in signed bundles (not production acceptance):** I added `npm run mcp:mac-signer-trust` as a **read-only, explicit, fail-closed** verifier for a separately provisioned Developer ID-signed host and its directly nested XPC service. It requires an operator-pinned Team ID and *two distinct* signing identifiers, and verifies Apple's Developer ID Application certificate chain through a required Apple code-signing expression for each bundle; the entire nested app seal; signer metadata and hardened runtime; and the worker's minimal App Sandbox entitlement. It rejects ad-hoc bundles. It cannot change launch policy or enable required-mode macOS.
+
+```sh
+npm run mcp:mac-signer-trust -- \
+  --app /absolute/path/to/TrustedHost.app \
+  --service /absolute/path/to/TrustedHost.app/Contents/XPCServices/TrustedWorker.xpc \
+  --team-id YOUR10CHAR \
+  --host-id dev.example.trusted.host \
+  --worker-id dev.example.trusted.worker
+```
+
+**The Team ID and both signing IDs must come from a previously approved release configuration, not from the code being examined.** The current ad-hoc acceptance bundles are expected to be rejected. We have not established a production Developer ID distribution identity, trust manifest or live peer authentication. Even a successful static requirement validation would *not* prove Gatekeeper/notarization, runtime peer checks or OS isolation of the final worker. On-device acceptance of this gate awaits the signed production artifact and separately pinned identity.
+
+Official Apple guidance: [Creating distribution-signed code for macOS](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/), [TN3127 code-signing requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements), [code signing -R verification](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/Procedures/Procedures.html), and [XPC peer team identity requirements](https://developer.apple.com/documentation/xpc/xpc_connection_set_peer_team_identity_requirement%28_%3A_%3A%29). A future production host must also enforce peer requirements on the live XPC connection; static verification alone is insufficient.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

@@ -50,7 +50,7 @@ export function inspectMacSignerDisplay(display,{teamId,identifier,label}) {
     throw Error(label+': expected signing identifier or Team ID mismatch.');
   if(!/^Authority=Developer ID Application:/m.test(display))
     throw Error(label+': Developer ID Application leaf certificate absent.');
-  if(!/^flags=0x[0-9a-f]+\([^\r\n]*\bruntime\b[^\r\n]*\)/im.test(display))
+  if(!/\bflags=0x[0-9a-f]+\([^\r\n]*\bruntime\b[^\r\n]*\)/im.test(display))
     throw Error(label+': hardened runtime flag not confirmed.');
   return true;
 }
