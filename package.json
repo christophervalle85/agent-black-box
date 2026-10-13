@@ -36,7 +36,8 @@
     "mcp:mac-xpc-mcp-modern": "node examples/mcp-macos-xpc-mcp-acceptance.mjs --modern",
     "mcp:mac-xpc-faults": "node examples/mcp-macos-xpc-fault-acceptance.mjs",
     "mcp:mac-xpc-service-failure": "node examples/mcp-macos-xpc-service-failure.mjs",
-    "mcp:mac-xpc-cancellation": "node examples/mcp-macos-xpc-cancellation.mjs"
+    "mcp:mac-xpc-cancellation": "node examples/mcp-macos-xpc-cancellation.mjs",
+    "mcp:mac-signer-trust": "node examples/mcp-macos-signer-trust.mjs"
   },
   "license": "MIT"
 }
