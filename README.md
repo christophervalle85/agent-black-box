@@ -1,8 +1,8 @@
-# Agent Black Box · v0.7
+# Agent Black Box · v0.8 development
 
 **Local AI agent security observability:** Agent Black Box checks instrumented AI-tool operations against deterministic security policies before execution, records policy decisions in a local audit log, and displays activity in a live dashboard. Earlier releases introduced human approval, a guarded MCP stdio gateway, dual-era MCP support, Linux Bubblewrap isolation, and HMAC-protected audit logging. **v0.7 adds signed independent checkpoint receipts, crash-recovery journaling, and incident-status monitoring.**
 
-![Status](https://img.shields.io/badge/MVP-v0.7-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
+![Status](https://img.shields.io/badge/branch-v0.8--dev-yellow) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
 ## Quick start
 
@@ -37,6 +37,19 @@ OLLAMA_MODEL=qwen3:8b npm start # pull that model first
 ```
 
 No cloud API key or npm dependency installation is required. The model download is a few gigabytes and needs sufficient memory. Data persists to the gitignored `data/audit.jsonl` file; Ctrl+C stops the server.
+
+## v0.8 in development: Apple App Sandbox
+
+**This branch is an experimental design gate; it is not a production macOS sandbox.** The stable `main` branch remains v0.7. Read the [macOS sandbox/XPC research and threat model](docs/MACOS_SANDBOX_V08.md) for Apple's official references and our staged acceptance criteria.
+
+On **macOS only**, to build and locally sign a disposable Swift feasibility probe and verify actual OS-denied file and network operations:
+
+```bash
+xcrun --find swiftc
+npm run mcp:mac-probe
+```
+
+A green probe demonstrates restrictions on **that specific signed native test executable only**, not the existing Node MCP worker. Until we build a separately sandboxed XPC/native worker and validate the complete MCP protocol, `MCP_SANDBOX=required` on macOS continues to **fail closed**, without an unsandboxed fallback. No production distribution signing or Apple Developer account is needed for this local feasibility experiment.
 
 ## v0.7: Independently verifiable evidence and crash recovery
 

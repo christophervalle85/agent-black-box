@@ -15,6 +15,7 @@ jobs:
       - run: node --check src/checkpoints.mjs
       - run: node --check src/audit-journal.mjs
       - run: node --check examples/mcp-isolation-check.mjs
+      - run: node --check examples/mcp-macos-probe.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
