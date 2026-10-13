@@ -1,6 +1,6 @@
 # Agent Black Box · v0.7
 
-**Local AI agent security observability**: a model-driven agent whose every requested tool operation is checked by a deterministic policy engine **before execution**, logged to a local audit store, and displayed in a live dashboard. v0.3 added time-limited human approval; **v0.4 added a real local MCP stdio gateway; v0.5 added dual-era protocol support and harder cancellation semantics; **v0.6 added Linux Bubblewrap isolation and tamper-evident HMAC audit verification; v0.7 adds independent checkpoint receipts, crash recovery and incident monitoring**, forwarding permitted calls to a separate downstream MCP notes server.
+**Local AI agent security observability:** Agent Black Box checks instrumented AI-tool operations against deterministic security policies before execution, records policy decisions in a local audit log, and displays activity in a live dashboard. Earlier releases introduced human approval, a guarded MCP stdio gateway, dual-era MCP support, Linux Bubblewrap isolation, and HMAC-protected audit logging. **v0.7 adds signed independent checkpoint receipts, crash-recovery journaling, and incident-status monitoring.**
 
 ![Status](https://img.shields.io/badge/MVP-v0.7-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 

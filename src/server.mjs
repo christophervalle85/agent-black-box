@@ -11,6 +11,7 @@ import { createOllamaClient, runAgent } from './agent.mjs';
 import { ApprovalQueue } from './approvals.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const appVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const publicFiles = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
@@ -54,7 +55,7 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     const host = req.headers.host ?? '';
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) return sendJson(res, 403, { error: 'Local host required.' });
     const url = new URL(req.url ?? '/', `http://${host}`);
-    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: '0.7.0', mode: 'local-only' });
+    if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, version: appVersion, mode: 'local-only' });
     if (req.method === 'GET' && url.pathname === '/api/audit/incidents') {
       try {
         const current=store.verify();
@@ -246,6 +247,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const { server } = createBlackBoxServer();
   const port = Number(process.env.PORT ?? '4317');
   server.listen(port, '127.0.0.1', () => {
-    console.log(`\n  AGENT BLACK BOX  v0.5\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
+    console.log(`\n  AGENT BLACK BOX  v${appVersion}\n  Dashboard: http://localhost:${port}\n  Listening locally only. Ctrl+C to stop.\n`);
   });
 }
