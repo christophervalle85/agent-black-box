@@ -26,7 +26,8 @@
     "anchor:ledger": "node src/checkpoint-cli.mjs ledger",
     "mcp:mac-probe": "node examples/mcp-macos-probe.mjs",
     "mcp:mac-crash": "node examples/mcp-macos-crash.mjs",
-    "mcp:mac-bundle-probe": "node examples/mcp-macos-probe.mjs --bundle"
+    "mcp:mac-bundle-probe": "node examples/mcp-macos-probe.mjs --bundle",
+    "mcp:mac-xpc-probe": "node examples/mcp-macos-xpc-probe.mjs"
   },
   "license": "MIT"
 }

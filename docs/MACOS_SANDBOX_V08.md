@@ -75,6 +75,22 @@ Results:
 
 The test deletes the temporary `.app` bundle and synthetic host marker. macOS may retain its system-created sandbox container under `~/Library/Containers/dev.agentblackbox.sandbox-probe.bundle`; do not delete arbitrary containers by script.
 
+### Phase 1c — macOS XPC service feasibility (awaiting on-device test)
+
+The user's **app-bundled signed Swift probe passed all three OS-level checks**, in contrast with the identically entitled loose executable's `libsystem_secinit` SIGTRAP. This establishes that app-bundle packaging changes the result; it does not establish the exact low-level secinit root cause.
+
+The next step embeds a **private XPC service in `Contents/XPCServices` of an ad-hoc signed host .app** and uses Apple's C-based XPC Services API. The service has its own `CFBundleIdentifier`, `XPC!` package type, a restrictive App Sandbox signature with **no network entitlement**, and a fixed single-method diagnostic interface. It is launched by macOS on demand through `xpc_connection_create`, not directly via Node's `spawn`. The parent host remains unsandboxed in this experiment so the boundary can be measured between host and service. Official documentation: [Apple Creating XPC Services](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingXPCServices.html) and [XPCService Info.plist keys](https://developer.apple.com/documentation/bundleresources/information-property-list/xpcservice).
+
+To test on macOS (requires Xcode Clang):
+
+```sh
+npm run mcp:mac-xpc-probe
+```
+
+The harness builds and signs a disposable host `.app` and nested `.xpc`, checks the nested signature/entitlement, starts a reachable loopback server, verifies an unrelated marker is host-readable, and requests one XPC diagnostic. Four outcomes must pass: separate process PID, permission-denied host file, permission-denied loopback TCP, and an allowed temporary-file write/cleanup in the service. Any failure (including XPC connection invalidation, timeout, or missing sandbox denial) fails closed and prints bounded diagnostics.
+
+**Not yet the production worker:** the service currently accepts only a synthetic test operation, not `read_note` or `write_note`. The Node gateway still uses the bundled Node MCP notes executable, and `MCP_SANDBOX=required` on macOS remains unsupported/fail-closed. Only after native XPC acceptance do we design the bounded, authorization-checked Node→host→XPC request bridge, secure workspace provisioning, and real MCP read/write tests. Build-system and signing policy remain experimental; an Xcode project may be preferable to manual app packaging for shipping.
+
 ## Phase 2 — native XPC worker architecture (not yet implemented)
 
 - Build a dedicated sandboxed XPC service inside a minimal signed macOS host app, separated from the existing unsandboxed Node control plane. Model its IPC as a fixed set of `read_note`/`write_note` operations; never forward arbitrary tool names, paths, file descriptors or commands.
