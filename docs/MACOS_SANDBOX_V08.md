@@ -239,6 +239,10 @@ The harness uses the **real MCP gateway, operator approval controller and fresh 
 
 This is a *partial, specifically scoped cancellation property*, **not** an assurance that a long-running XPC service operation is itself interrupted by killing its native host. The XPC worker has completed its write before this cancellation. Tests still needed: cancellation while native XPC service is executing, crash-loop/rate control, pending approvals, trusted signed host/service identities, final worker OS-denial checks, and production document import/export. The original native workers remain unchanged and `MCP_SANDBOX=required` still refuses macOS.
 
+**Further Phase 3E hardening:** Tool calls enter the active cancellation map before asynchronous modern-protocol discovery, so a stdio cancellation during cold start cannot race into downstream dispatch. Cancellation that races a completed callback is classified as `MCP_OUTCOME_UNKNOWN`; cancellation that races operator approval remains blocked under `MCP_CANCELLED`. Additional Node tests verify the HMAC audit chain and these states.
+
+References: [MCP 2026-07-28 Cancellation](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/patterns/cancellation.mdx) requires stdio cancellation notifications and recommends no response to cancelled requests. Apple's [xpc_connection_cancel](https://developer.apple.com/documentation/xpc/xpc_connection_cancel%28_%3A%29) is **asynchronous and non-preemptive**: cancelling a host-side connection does not stop a running XPC worker handler. Full Phase 3E and macOS required-mode acceptance therefore remain blocked on a controlled in-progress native worker cancellation test.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

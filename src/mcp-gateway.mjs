@@ -115,7 +115,19 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
     return {approved:result.approved===true && !signal.aborted};
   }
 
+  // Track in-flight tool calls before asynchronous downstream discovery.
   async function dispatch(msg) {
+    const {id,method}=msg;
+    if(method!=='tools/call')return dispatchCore(msg,null);
+    if(active.has(id))return error(id,-32600,'Duplicate active request ID.');
+    if(active.size>=8)return error(id,-32000,'Gateway concurrency limit exceeded.');
+    const abort=new AbortController();
+    active.set(id,abort);
+    try{return await dispatchCore(msg,abort);}
+    finally{active.delete(id);}
+  }
+
+  async function dispatchCore(msg,abort) {
     const {id,method}=msg;
     // Allow modern clients to probe without an initialize handshake.
     if(method==='server/discover') {
@@ -141,8 +153,12 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
     if(!era && versionMeta(msg.params)!==undefined){
       if(!checkModern(id,msg.params))return;
       era='modern';
-      try{await ensureDownstream();}catch{return error(id,-32000,'MCP downstream unavailable.');}
+      try{await ensureDownstream();}catch{
+        if(abort?.signal.aborted)return;
+        return error(id,-32000,'MCP downstream unavailable.');
+      }
     }
+    if(abort?.signal.aborted)return;
     if(!era)return error(id,-32002,'Initialize or send a versioned modern request first.');
     if(era==='legacy' && !initialized)return error(id,-32002,'Legacy MCP session not initialized.');
     if(era==='modern' && !checkModern(id,msg.params))return;
@@ -152,14 +168,12 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
       return answer(id,{tools:EXPOSED_TOOLS});
     }
     if(method!=='tools/call')return error(id,-32601,'Method not permitted by MCP gateway.');
-    if(active.has(id))return error(id,-32600,'Duplicate active request ID.');
-    if(active.size>=8)return error(id,-32000,'Gateway concurrency limit exceeded.');
     if(!object(msg.params) || typeof msg.params.name!=='string' || msg.params.name.length>128 || !object(msg.params.arguments))return error(id,-32602,'Invalid MCP tool parameters.');
     if(JSON.stringify(msg.params.arguments).length>3500)return error(id,-32602,'Tool arguments too large.');
     // Disallow modern multi-round-trip request payloads we cannot enforce.
     if(era==='modern' && (msg.params.requestState!==undefined || msg.params.inputResponses!==undefined))return error(id,-32602,'Multi-round-trip MCP requests not supported.');
     const {name}=msg.params, args=msg.params.arguments;
-    const abort=new AbortController();active.set(id,abort);
+    if(abort.signal.aborted)return;
     try {
       const tool=Object.hasOwn(ALLOWED,name)?ALLOWED[name]:`mcp.unknown.${name.slice(0,40)}`;
       const safeArgs=validArgs(name,args)?structuredClone(args):{};
@@ -193,7 +207,6 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
       if(checked.event.outcome==='error')return answer(id,toolFailure('Downstream MCP tool failed; see local audit.'));
       return answer(id,checked.result);
     }catch {if(!abort.signal.aborted)answer(id,toolFailure('MCP gateway unavailable; request not authorized.'));}
-    finally{active.delete(id);}
   }
 
   const unlisten=readJsonLines(input,{
