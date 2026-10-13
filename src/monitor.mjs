@@ -107,10 +107,14 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
     return { event, result: result?.value };
   } catch (error) {
     event.outcome = 'error';
-    if (signal?.aborted) {
+    if (signal?.aborted || error?.outcomeUnknown === true) {
       event.ruleId = 'MCP_OUTCOME_UNKNOWN';
-      event.reason = 'The client cancelled after execution began. Side effects may have already occurred.';
-      event.summary = 'Downstream was cancelled; execution outcome is uncertain, not safely rolled back.';
+      event.reason = signal?.aborted
+        ? 'The client cancelled after execution began. Side effects may have already occurred.'
+        : 'Native or downstream acknowledgement was lost after dispatch; side effects may already have occurred.';
+      event.summary = signal?.aborted
+        ? 'Downstream was cancelled; execution outcome is uncertain, not safely rolled back.'
+        : 'Downstream failed or timed out; write outcome unknown, not safely rolled back.';
     } else {
       event.summary = 'Execution failed; raw error details withheld from audit storage.';
     }

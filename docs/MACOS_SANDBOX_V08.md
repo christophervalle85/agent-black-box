@@ -188,6 +188,25 @@ The downstream test adapter continues to speak the previously validated **legacy
 
 **Not yet production:** On-device native modern test is pending; failures in cancellation, native worker termination, crash recovery, status unknown, signer trust, final OS denial on the exact service, or explicit user document import/export still block `MCP_SANDBOX=required` on macOS. The normal `npm run mcp` launch is unchanged and cannot select this test path via an environment variable. This is a test-only in-process hook in `MCP_SANDBOX=off` mode.
 
+### Phase 3C — Native host hang and post-commit crash fault injection (Mac acceptance pending)
+
+**Phase 3B on-device accepted:** The user ran `npm run mcp:mac-xpc-mcp-modern` and passed real modern MCP discovery/version and missing-metadata refusals, allowlisted native note operations, denied and approved writes, exact XPC readback, exclusive-create protection and fresh HMAC audit integrity. As with Phase 3A, all notes and audit keys were disposable synthetic test fixtures.
+
+The next opt-in diagnostic is:
+
+```sh
+npm run mcp:mac-xpc-faults
+```
+
+This uses a **separate, intentionally instrumented** `FaultBridgeHost.c` only in the test build. The **unchanged** normal `AuthorityBridgeHost.c` still has no fault injection. Node forwards a fixed `BLACKBOX_XPC_TEST_FAULT=1` flag exclusively to this diagnostic host through the synthetic-only adapter; a real user cannot select it from the normal gateway CLI. The separately sandboxed XPC service is still signed with the original restrictive entitlement. Both tests go through the real MCP gateway, actual operator approval endpoint, native service, and a fresh temporary authenticated audit log:
+
+1. `bbx-test-fault-hang-*.txt`: the diagnostic host intentionally hangs **before dispatching its XPC write**. Node's bounded subprocess supervisor terminates it; the client gets an error, the note must be absent, and the audit records **`MCP_OUTCOME_UNKNOWN`** conservatively. A missing pre-write side effect observed afterwards does not prove rollback for arbitrary future operations.
+2. `bbx-test-fault-crash-*.txt`: the worker successfully creates the synthetic note, then the diagnostic native host deliberately terminates after receiving XPC success **but before notifying Node**. The MCP client must receive an error, the synthetic note must actually exist with exact bytes, and the HMAC audit must record **`MCP_OUTCOME_UNKNOWN`**, never false success or a confidently rolled-back write.
+
+The test then reads the crash-committed synthetic note via the normal native host path to show the adapter remains available, verifies the fresh HMAC audit chain and note-content redaction, and attempts to delete only its synthetic note in `finally`. A killed test can leave disposable scratch notes; never delete existing containers or user documents automatically.
+
+**Scope and exclusions:** This is native **host** termination/hang injection, not an actual XPC **service** crash or a cancellation-after-dispatch guarantee. We still need a safe service-crash/lifecycle test, cancellation propagation down to the host process, independent Developer ID/Team ID verification and service identity, final-worker denied file/network regressions, user-workspace data flow, and complete Mac required-mode acceptance. `MCP_SANDBOX=required` on macOS still refuses execution, and v0.7 `main` is unchanged.
+
 ### Engineering gates before enabling `MCP_SANDBOX=required` on macOS
 
 1. Complete native note XPC test using synthetic data.

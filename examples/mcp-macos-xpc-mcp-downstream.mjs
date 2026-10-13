@@ -20,6 +20,7 @@ const names=Object.freeze([
 ]);
 const host=process.env.BLACKBOX_EXPERIMENTAL_XPC_HOST;
 const EXAMPLE_ERA='2025-11-25';
+const nativeTimeout=process.env.BLACKBOX_XPC_TEST_FAULT==='1'?750:8500;
 let initialized=false;
 let ended=false;
 const send=(id,result)=>sendJsonLine(process.stdout,{jsonrpc:'2.0',id,result});
@@ -35,7 +36,8 @@ export async function nativeRequest(executable,method,path,content='',{timeoutMs
     let settled=false,overflow=false,timedOut=false;
     const child=spawn(executable,[],{shell:false,stdio:['pipe','pipe','pipe'],
       env:{PATH:'/usr/bin:/bin',HOME:process.env.HOME??'',TMPDIR:process.env.TMPDIR??'/tmp',
-        LANG:'C.UTF-8'}});
+        LANG:'C.UTF-8',
+        ...(process.env.BLACKBOX_XPC_TEST_FAULT==='1'?{BLACKBOX_XPC_TEST_FAULT:'1'}:{})}});
     const finish=(err,answer)=>{
       if(settled)return;
       settled=true;
@@ -55,9 +57,12 @@ export async function nativeRequest(executable,method,path,content='',{timeoutMs
     child.on('error',err=>finish(Error('Native host launch failed.')));
     child.on('close',(status,signal)=>{
       if(timedOut||overflow||status!==0||signal)
-        return finish(Error('Native XPC result unavailable; write outcome may be unknown.'));
+        return finish(Object.assign(
+          Error('Native XPC result unavailable; write outcome may be unknown.'),
+          {outcomeUnknown:true}));
       try{finish(null,parseBridgeReply(data));}
-      catch{finish(Error('Malformed native XPC response.'));}
+      catch{finish(Object.assign(Error('Malformed native XPC response.'),
+        {outcomeUnknown:true}));}
     });
     child.stdin.end(frame);
   });
@@ -89,11 +94,17 @@ async function dispatch(message) {
     return send(id,noDetails);
   try{
     const reply=await nativeRequest(host,name==='read_note'?'READ':'WRITE',
-      args.path,name==='write_note'?args.content:'');
+      args.path,name==='write_note'?args.content:'',{timeoutMs:nativeTimeout});
     if(!reply.ok)return send(id,noDetails);
     return send(id,{content:[{type:'text',text:
       name==='read_note'?reply.content:'Synthetic native note created with exclusive-new-file semantics.'}]});
-  }catch{return send(id,noDetails);}
+  }catch(error){
+    // Internal gateway adapter protocol: a timeout or crashed host after
+    // dispatch can no longer prove whether a WRITE created its note.
+    const unknown=name==='write_note'&&error?.outcomeUnknown===true;
+    return send(id,unknown?{...noDetails,
+      _meta:{'dev.agentblackbox/outcomeUnknown':true}}:noDetails);
+  }
 }
 if(process.argv[1] && new URL('file://'+process.argv[1]).href===import.meta.url) {
   if(process.platform!=='darwin'||process.env.MCP_SANDBOX!=='off'||!host||!host.startsWith('/')){

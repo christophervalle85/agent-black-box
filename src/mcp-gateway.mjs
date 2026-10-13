@@ -169,8 +169,22 @@ export async function startGateway({ input=process.stdin, output=process.stdout,
         requestApproval:req=>requestApproval(req,{signal:abort.signal}),
         execute:async fixedArgs=>{
           if(abort.signal.aborted)throw Error('MCP call cancelled.');
-          const response=await peer.request('tools/call',{name,arguments:fixedArgs},{signal:abort.signal});
-          if(!Array.isArray(response?.content)||response.isError)throw Error('Downstream tool failed.');
+          let response;
+          try {
+            response=await peer.request('tools/call',{name,arguments:fixedArgs},{signal:abort.signal});
+          }catch(error){
+            // The write may have committed before the downstream transport
+            // died or timed out. Never log that uncertainty as a known denial.
+            if(name==='write_note')error.outcomeUnknown=true;
+            throw error;
+          }
+          if(!Array.isArray(response?.content)||response.isError) {
+            const error=new Error('Downstream tool failed.');
+            if(name==='write_note' &&
+              response?._meta?.['dev.agentblackbox/outcomeUnknown']===true)
+              error.outcomeUnknown=true;
+            throw error;
+          }
           return {value:response,summary:`MCP tool ${name} executed; output omitted from audit.`};
         }
       });
