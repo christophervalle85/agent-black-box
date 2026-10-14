@@ -32,6 +32,7 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-notes-isolation.mjs
       - run: node --check examples/mcp-macos-xpc-inbound-peer-negative.mjs
       - run: node --check src/macos-signer-trust.mjs
+      - run: node --check src/macos-transfer-intent.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
