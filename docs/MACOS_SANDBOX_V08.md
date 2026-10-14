@@ -329,3 +329,10 @@ Acceptance requires a baseline **host-readable synthetic home-directory file**, 
 
 This is an **instrumented build of the actual notes-worker source**, not a byte-identical production release binary. The test macro and ad-hoc signing must never be present in release artifacts. Static Developer ID/Team ID trust, live positive host ↔ worker identity authentication, notarization as appropriate, explicit user-approved document import/export and macOS `MCP_SANDBOX=required` remain incomplete. This fixture does not grant approval to merge the PR.
 
+
+### Phase 4 notes-worker isolation — test response serialization fix
+
+My first on-Mac run of `MCP_SANDBOX=off npm run mcp:mac-xpc-notes-isolation` compiled and verified the signed test worker, established the host-file and loopback baselines, then raised `Native notes worker did not acknowledge a valid probe.` The ordinary `mcp:mac-xpc-authority` acceptance separately passed all checks.
+
+The cause was a **harness response-shape mismatch**, not an observed OS isolation failure. `ProbeHost.c` rejected a native reply unless it was a dictionary with `valid=true`; upon success it emitted the existing probe JSON fields **without** `valid`. The new notes isolation JS diagnostic incorrectly required that validated field in the serialized JSON. I updated **only the disposable native probe host's `BBX_TEST_NOTES_ISOLATION` build** to include a verified `valid:true` prefix. The ordinary probe JSON stays byte-for-byte compatible. The strict JS native-acknowledgement check and OS-denial conditions are unchanged. The new run still requires actual on-device OS permission-denied and private Documents write evidence; do not call this gate accepted until that command passes.
+

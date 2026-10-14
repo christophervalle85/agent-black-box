@@ -33,6 +33,13 @@ test('probe is compiled only into a disposable AuthorityNotesService build, not 
   assert.match(worker,/networkDenied=connected<0&&/);
   assert.match(worker,/fileDenied=fd<0&&/);
   assert.match(host,/"dev\.agentblackbox\.xpc-authority\.worker"/);
+  // The host verifies the XPC response before serializing its test-only
+  // acknowledgement. Never weaken assessNotesWorkerIsolation(valid).
+  assert.match(host,/!xpc_dictionary_get_bool\(reply,"valid"\)/);
+  assert.match(host,/const char \*verifiedPrefix="\{\\\"valid\\\":true,";/);
+  assert.match(host,/printf\("%s\\\"hostPID\\\"/);
+  assert.match(host,/#else\s+const char \*verifiedPrefix="\{";/);
+
   assert.match(script,/-DBBX_TEST_NOTES_ISOLATION=1/);
   assert.match(script,/AuthorityNotesService\.m/);
   assert.match(script,/MCP_SANDBOX!=='off'/);

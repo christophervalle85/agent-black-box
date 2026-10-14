@@ -46,11 +46,23 @@ int main(int argc,char **argv) {
         if(xpc_get_type(reply)!=XPC_TYPE_DICTIONARY ||
            !xpc_dictionary_get_bool(reply,"valid"))
            fail("XPC service did not return a valid reply",72);
-        printf("{\"hostPID\":%ld,\"workerPID\":%" PRId64 ","
+        /*
+         * The XPC reply's valid flag has already been verified above.
+         * In the notes isolation build forward it as a literal verified
+         * acknowledgement so the strict JS gate can distinguish a valid
+         * worker reply from missing/invalid output. Preserve the historical
+         * generic XPC probe JSON format in the ordinary build.
+         */
+#ifdef BBX_TEST_NOTES_ISOLATION
+        const char *verifiedPrefix="{\"valid\":true,";
+#else
+        const char *verifiedPrefix="{";
+#endif
+        printf("%s\"hostPID\":%ld,\"workerPID\":%" PRId64 ","
                "\"hostFileDenied\":%s,\"hostFileErrno\":%" PRId64 ","
                "\"networkDenied\":%s,\"networkErrorNumber\":%" PRId64 ","
                "\"temporaryWriteAllowed\":%s,\"temporaryWriteErrno\":%" PRId64 "}\n",
-               (long)getpid(),xpc_dictionary_get_int64(reply,"workerPID"),
+               verifiedPrefix,(long)getpid(),xpc_dictionary_get_int64(reply,"workerPID"),
                xpc_dictionary_get_bool(reply,"hostFileDenied")?"true":"false",
                xpc_dictionary_get_int64(reply,"hostFileErrno"),
                xpc_dictionary_get_bool(reply,"networkDenied")?"true":"false",
