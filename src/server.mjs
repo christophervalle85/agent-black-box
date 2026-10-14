@@ -9,6 +9,7 @@ import { POLICIES } from './policy.mjs';
 import { runDemo } from './demo.mjs';
 import { createOllamaClient, runAgent } from './agent.mjs';
 import { ApprovalQueue } from './approvals.mjs';
+import { createAuditedMacTransferController } from './macos-transfer-controller.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const appVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
@@ -27,10 +28,16 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.jsonl'), workspaceRoot = join(root, 'demo-workspace'), agentClient = createOllamaClient() } = {}) {
+export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.jsonl'), workspaceRoot = join(root, 'demo-workspace'), agentClient = createOllamaClient(), experimentalMacTransferReviews = false } = {}) {
+  if(typeof experimentalMacTransferReviews!=='boolean')
+    throw Error('Experimental Mac transfer reviews must be an explicit boolean.');
   mkdirSync(workspaceRoot, { recursive: true });
   const store = new AuditStore(dataFile);
   const approvalQueue = new ApprovalQueue();
+  // Explicit IN-PROCESS experiment only; disabled in the normal server CLI.
+  // A model/MCP client cannot open or consume reviews over HTTP.
+  const macTransfer = experimentalMacTransferReviews
+    ? createAuditedMacTransferController({store}) : null;
   // Ephemeral controller credential, file mode 0600. Rotate with every server start.
   // Not protection against hostile programs already running as the same OS user.
   const tokenFile = join(dirname(dataFile), 'mcp-controller-token');
@@ -87,6 +94,44 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
     if (req.method === 'GET' && url.pathname === '/api/policies') return sendJson(res, 200, { policies: POLICIES });
     if (req.method === 'GET' && url.pathname === '/api/approvals') {
       return sendJson(res, 200, { pending: approvalQueue.list() });
+    }
+    if (macTransfer && req.method === 'GET' &&
+        url.pathname === '/api/mac/transfers/pending') {
+      try {
+        return sendJson(res,200,{pending:macTransfer.controller.pending()});
+      } catch {
+        return sendJson(res,503,{error:'Transfer review audit integrity unavailable.'});
+      }
+    }
+    const macDecisionMatch = macTransfer
+      ? /^\/api\/mac\/transfers\/([0-9a-f-]{36})\/decision$/i.exec(url.pathname)
+      : null;
+    if(req.method === 'POST' && macDecisionMatch){
+      // Same-origin local browser decision is NOT strong user authentication.
+      // A real native operator identity/picker gate remains mandatory before
+      // any OS file transfer is implemented. No HTTP route creates a review.
+      if(req.headers.origin !== 'http://'+host ||
+         !String(req.headers['content-type']??'').startsWith('application/json'))
+        return sendJson(res,403,{error:'Same-origin operator review required.'});
+      let raw='';
+      try {
+        for await(const chunk of req){
+          raw+=chunk.toString('utf8');
+          if(Buffer.byteLength(raw)>128)
+            return sendJson(res,413,{error:'Decision body too large.'});
+        }
+      }catch{return sendJson(res,400,{error:'Could not read decision.'});}
+      let body;
+      try{body=JSON.parse(raw);}catch{return sendJson(res,400,{error:'Invalid decision JSON.'});}
+      if(!body || typeof body!=='object' || Array.isArray(body) ||
+         Object.keys(body).length!==1 ||
+         !['approve','deny'].includes(body.decision))
+        return sendJson(res,400,{error:'Decision must be approve or deny.'});
+      try {
+        if(!macTransfer.controller.decide(macDecisionMatch[1],body.decision))
+          return sendJson(res,409,{error:'No pending transfer review.'});
+        return sendJson(res,200,{resolved:true,transferExecuted:false});
+      }catch{return sendJson(res,503,{error:'Audit unavailable; decision not granted.'});}
     }
     const decisionMatch = /^\/api\/approvals\/([0-9a-f-]{36})\/decision$/i.exec(url.pathname);
     if (req.method === 'POST' && decisionMatch) {
@@ -235,12 +280,14 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
   const originalClose = server.close.bind(server);
   server.close = callback => {
     approvalQueue.close();
+    macTransfer?.controller.close();
     for (const stream of streams) stream.end();
     streams.clear();
     store.off('event', onEvent);
     return originalClose(callback);
   };
-  return { server, store, approvalQueue, tokenFile };
+  return { server, store, approvalQueue, tokenFile,
+    macTransferHost:macTransfer?.host??null };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
