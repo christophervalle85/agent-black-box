@@ -5,7 +5,7 @@ import {assessInboundPeerRejection} from '../examples/mcp-macos-xpc-inbound-peer
 const file=p=>readFileSync(new URL(p,import.meta.url),'utf8');
 const valid=()=>({
   armedPid:1234,workerAlive:true,workerMarkerFresh:true,
-  hostAttempted:true,hostStdout:'',hostStderr:'BBX_INBOUND_REQUEST_ATTEMPTED\\n',
+  hostAttempted:true,hostStdout:'',hostStderr:'BBX_INBOUND_REQUEST_ATTEMPTED\n',
   hostExited:false,hostExitCode:null,hostExitSignal:null,
   hostError:null,hostOverflow:false,deliverySeen:false
 });
@@ -14,16 +14,16 @@ test('worker-side peer-identity acceptance requires armed live worker and no inc
   for(const bad of [
     {armedPid:0},{armedPid:-1},{armedPid:'1234'},
     {workerAlive:false},{workerMarkerFresh:false},
-{hostAttempted:false},{hostStdout:'OK 1\\na'},{deliverySeen:true},
+{hostAttempted:false},{hostStdout:'OK 1\na'},{deliverySeen:true},
     {hostError:'ENOENT'},{hostOverflow:true},{hostExitSignal:'SIGKILL'},
-    {hostExited:true,hostExitCode:65},{hostExited:true,hostExitCode:0,hostStdout:'ERR 0\\n'},
-    {hostExited:true,hostExitCode:0,hostStdout:'OK 1\\na',
+    {hostExited:true,hostExitCode:65},{hostExited:true,hostExitCode:0,hostStdout:'ERR 0\n'},
+    {hostExited:true,hostExitCode:0,hostStdout:'OK 1\na',
       hostStderr:'BBX_INBOUND_XPC_ERROR'}
   ])assert.throws(()=>assessInboundPeerRejection({...valid(),...bad}));
   assert.throws(()=>assessInboundPeerRejection());
   assert.equal(assessInboundPeerRejection({
-    ...valid(),hostExited:true,hostExitCode:0,hostStdout:'ERR 0\\n',
-    hostStderr:'BBX_INBOUND_REQUEST_ATTEMPTED\\nBBX_INBOUND_XPC_ERROR\\n'
+    ...valid(),hostExited:true,hostExitCode:0,hostStdout:'ERR 0\n',
+    hostStderr:'BBX_INBOUND_REQUEST_ATTEMPTED\nBBX_INBOUND_XPC_ERROR\n'
   }),true);
 });
 test('only test worker builds install the OS incoming code-signing requirement before resume',()=>{
@@ -40,7 +40,7 @@ test('only test worker builds install the OS incoming code-signing requirement b
   assert.ok(worker.indexOf('peerGate=bbx_install_same_team_peer_requirement')<
     worker.indexOf('xpc_connection_resume(peer)'));
   assert.match(worker,/O_EXCL\|O_NOFOLLOW\|O_CLOEXEC/);
-  assert.match(host,/#ifdef BBX_TEST_INBOUND_CLIENT/);
+  assert.match(host,/#elif defined\(BBX_TEST_INBOUND_CLIENT\)/);
   assert.match(host,/"dev\.agentblackbox\.xpc-inbound-baseline\.worker"/);
   assert.match(host,/"dev\.agentblackbox\.xpc-inbound-restricted\.worker"/);
   assert.match(host,/BBX_INBOUND_REQUEST_ATTEMPTED/);
