@@ -47,8 +47,10 @@ static void response(bool ok,const char *data,size_t n) {
     fflush(stdout);
 }
 int main(void){
-#ifdef BBX_TEST_INBOUND_CLIENT
-    const char *serviceName="dev.agentblackbox.xpc-inbound.worker";
+#if defined(BBX_TEST_INBOUND_BASELINE_CLIENT)
+    const char *serviceName="dev.agentblackbox.xpc-inbound-baseline.worker";
+#elif defined(BBX_TEST_INBOUND_CLIENT)
+    const char *serviceName="dev.agentblackbox.xpc-inbound-restricted.worker";
 #else
     const char *serviceName="dev.agentblackbox.xpc-authority.worker";
 #endif
@@ -119,8 +121,19 @@ int main(void){
          * host relies on Node's external kill deadline. A timed-out write
          * is an UNKNOWN outcome, not a safe rollback.
          */
+#ifdef BBX_TEST_INBOUND_CLIENT
+        /* Test-only dispatch marker; does not claim the worker received it. */
+        fputs("BBX_INBOUND_REQUEST_ATTEMPTED\n",stderr);
+        fflush(stderr);
+#endif
         xpc_object_t reply=xpc_connection_send_message_with_reply_sync(connection,request);
         xpc_release(request);
+#ifdef BBX_TEST_INBOUND_CLIENT
+        if(reply && xpc_get_type(reply)==XPC_TYPE_ERROR) {
+            fputs("BBX_INBOUND_XPC_ERROR\n",stderr);
+            fflush(stderr);
+        }
+#endif
 #ifdef BBX_TEST_PEER_REQUIREMENT
         // At this point Apple accepted the OS-level requirement installation.
         // A dictionary response would mean an ad-hoc-signed peer was

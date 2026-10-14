@@ -8,9 +8,8 @@
  * operations are enabled. Timeouts alone NEVER establish authentication.
  */
 import {spawn,spawnSync} from 'node:child_process';
-import {once} from 'node:events';
 import {
-  copyFileSync,existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,writeFileSync
+  existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,writeFileSync
 } from 'node:fs';
 import {homedir,tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
@@ -21,8 +20,18 @@ import {inspectMinimalWorkerEntitlements} from '../src/macos-signer-trust.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const sources=join(root,'native','macos','xpc');
-const workerIdentifier='dev.agentblackbox.xpc-inbound.worker';
-const hostIdentifier='dev.agentblackbox.xpc-inbound.host';
+const identities=Object.freeze({
+  baseline:Object.freeze({
+    host:'dev.agentblackbox.xpc-inbound-baseline.host',
+    worker:'dev.agentblackbox.xpc-inbound-baseline.worker',
+    clientFlag:'-DBBX_TEST_INBOUND_BASELINE_CLIENT=1'
+  }),
+  restricted:Object.freeze({
+    host:'dev.agentblackbox.xpc-inbound-restricted.host',
+    worker:'dev.agentblackbox.xpc-inbound-restricted.worker',
+    clientFlag:'-DBBX_TEST_INBOUND_CLIENT=1'
+  })
+});
 const armedName='bbx-test-inbound-armed.txt';
 const deliveredName='bbx-test-inbound-delivered.txt';
 function command(exe,args,label,{input,timeout=30000}={}){
@@ -57,14 +66,27 @@ function liveWorker(pid) {
   return r.status===0 && state!=='' && !state.startsWith('Z');
 }
 export function assessInboundPeerRejection({armedPid,workerAlive,deliverySeen,
-  hostAnswered,hostRunning,workerMarkerFresh}={}) {
+  workerMarkerFresh,hostAttempted,hostStdout='',hostStderr='',
+  hostExited=false,hostExitCode=null,hostExitSignal=null,
+  hostError=null,hostOverflow=false}={}) {
   if(!workerMarkerFresh || !Number.isSafeInteger(armedPid)||armedPid<=0 ||
      workerAlive!==true)
     throw Error('Worker-side signing requirement was not proven installed on a live worker.');
-  if(hostRunning!==true || hostAnswered!==false)
-    throw Error('Unauthorized native host was not demonstrably blocked while worker lived.');
   if(deliverySeen!==false)
     throw Error('Unauthorized request reached the restricted native worker handler.');
+  if(hostAttempted!==true || hostError || hostOverflow || hostExitSignal)
+    throw Error('Untrusted host did not attempt a clean native request.');
+  if(hostStdout.startsWith('OK '))
+    throw Error('Unauthorized host received a successful worker response.');
+  // Apple may immediately return an XPC error to the initiating process.
+  // Accept that *only* with native typed-XPC-error evidence, no successful
+  // reply, and independently verified worker-side live gate + no delivery.
+  if(hostExited) {
+    if(hostExitCode!==0 || hostStdout!=='ERR 0\n' ||
+       !hostStderr.includes('BBX_INBOUND_XPC_ERROR'))
+      throw Error('Early native host exit had no verified XPC rejection evidence.');
+  }else if(hostStdout!=='')
+    throw Error('Native host emitted unexpected output while awaiting rejection.');
   return true;
 }
 function dispatch(host){
@@ -73,8 +95,12 @@ function dispatch(host){
     env:{PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C.UTF-8'}
   });
   let stdout='',stderr='',error=null,exited=false,overflow=false;
+  let code=null,signal=null;
   const completion=new Promise(resolve=>{
-    child.on('close',(code,signal)=>{exited=true;resolve({code,signal});});
+    child.on('close',(exitCode,exitSignal)=>{
+      exited=true;code=exitCode;signal=exitSignal;
+      resolve({code,signal});
+    });
   });
   child.on('error',e=>{error=e.message;});
   child.stdout.on('data',chunk=>{
@@ -88,7 +114,7 @@ function dispatch(host){
   child.stdin.on('error',()=>{});
   child.stdin.end('ROOT - 0\n');
   return {child,completion,observe:()=>({
-    stdout,stderr,error,exited,overflow
+    stdout,stderr,error,exited,overflow,code,signal
   })};
 }
 async function sleep(ms){await new Promise(resolve=>setTimeout(resolve,ms));}
@@ -96,115 +122,148 @@ async function main(){
   if(process.platform!=='darwin')throw Error('Real macOS required.');
   if(process.env.MCP_SANDBOX!=='off')
     throw Error('Synthetic XPC inbound-peer test requires explicit MCP_SANDBOX=off.');
-  if(process.argv.slice(2).length!==0)
-    throw Error('Unexpected fixture arguments.');
+  if(process.argv.slice(2).length!==0)throw Error('Unexpected fixture arguments.');
   command('/usr/bin/xcrun',['--find','clang'],'Native compiler');
   const dir=mkdtempSync(join(tmpdir(),'bb-inbound-peer-'));
-  let trial,workspace,armedPath,deliveredPath;
+  let trial,armedPath,deliveredPath,restrictedRoot;
   try {
-    const app=join(dir,'BlackBoxInboundHost.app');
-    const host=join(app,'Contents','MacOS','BlackBoxAuthorityHost');
-    const bundle=join(app,'Contents','XPCServices','BlackBoxAuthorityWorker.xpc');
-    const worker=join(bundle,'Contents','MacOS','BlackBoxAuthorityWorker');
-    mkdirSync(dirname(host),{recursive:true});
-    mkdirSync(dirname(worker),{recursive:true});
-    const hostPlist=readFileSync(join(sources,'AuthorityHost-Info.plist'),'utf8')
-      .replace('dev.agentblackbox.xpc-authority.host',hostIdentifier);
-    const workerPlist=readFileSync(join(sources,'AuthorityService-Info.plist'),'utf8')
-      .replace('dev.agentblackbox.xpc-authority.worker',workerIdentifier);
-    if(!hostPlist.includes(hostIdentifier)||!workerPlist.includes(workerIdentifier))
-      throw Error('Synthetic XPC bundle identity fixture incorrect.');
-    writeFileSync(join(app,'Contents','Info.plist'),hostPlist);
-    writeFileSync(join(bundle,'Contents','Info.plist'),workerPlist);
-    command('/usr/bin/xcrun',['clang','-std=c11','-fblocks','-O2',
-      '-Wall','-Wextra','-DBBX_TEST_INBOUND_CLIENT=1',
-      '-o',host,join(sources,'AuthorityBridgeHost.c')],
-    'Native inbound test host build');
-    const workerBuild=(restricted)=>command('/usr/bin/xcrun',
-      ['clang','-std=c11','-fblocks','-O2','-Wall','-Wextra',
-       ...(restricted?['-DBBX_TEST_INBOUND_PEER_REQUIREMENT=1']:[]),
-       '-o',worker,join(sources,'AuthorityNotesService.m'),
-       '-framework','Foundation'],
-      restricted?'Restricted XPC worker build':'Baseline XPC worker build');
-    const signWorker=()=>command('/usr/bin/codesign',
-      ['--force','--sign','-','--options','runtime',
-       '--identifier',workerIdentifier,
-       '--entitlements',join(root,'native','macos','SandboxProbe.entitlements'),
-       bundle],'Ad-hoc App Sandbox worker signature');
-    const signHost=()=>command('/usr/bin/codesign',
-      ['--force','--sign','-','--options','runtime',
-       '--identifier',hostIdentifier,app],
-      'Ad-hoc host signature');
-    const verify=()=>{
+    /*
+     * NEVER recompile/re-sign a worker after starting it. launchd may keep
+     * that signed XPC image alive or cached, and overwriting it can cause
+     * premature invalidation unrelated to peer identity. Build two separate
+     * app bundles, nested workers and unique service/signing identifiers.
+     */
+    const buildVariant=(which)=>{
+      const ids=identities[which];
+      const app=join(dir,which==='baseline'?'BaselineHost.app':'RestrictedHost.app');
+      const host=join(app,'Contents','MacOS','BlackBoxAuthorityHost');
+      const bundle=join(app,'Contents','XPCServices','BlackBoxAuthorityWorker.xpc');
+      const worker=join(bundle,'Contents','MacOS','BlackBoxAuthorityWorker');
+      mkdirSync(dirname(host),{recursive:true});
+      mkdirSync(dirname(worker),{recursive:true});
+      const hostPlist=readFileSync(join(sources,'AuthorityHost-Info.plist'),'utf8')
+        .replace('dev.agentblackbox.xpc-authority.host',ids.host);
+      const workerPlist=readFileSync(join(sources,'AuthorityService-Info.plist'),'utf8')
+        .replace('dev.agentblackbox.xpc-authority.worker',ids.worker);
+      if(!hostPlist.includes(ids.host)||!workerPlist.includes(ids.worker))
+        throw Error('Synthetic XPC identity was not installed in Info.plist.');
+      writeFileSync(join(app,'Contents','Info.plist'),hostPlist);
+      writeFileSync(join(bundle,'Contents','Info.plist'),workerPlist);
+      command('/usr/bin/xcrun',['clang','-std=c11','-fblocks','-O2',
+        '-Wall','-Wextra',ids.clientFlag,'-o',host,
+        join(sources,'AuthorityBridgeHost.c')],'Native '+which+' host build');
+      command('/usr/bin/xcrun',['clang','-std=c11','-fblocks','-O2',
+        '-Wall','-Wextra',
+        ...(which==='restricted'?['-DBBX_TEST_INBOUND_PEER_REQUIREMENT=1']:[]),
+        '-o',worker,join(sources,'AuthorityNotesService.m'),
+        '-framework','Foundation'],'Native '+which+' worker build');
+      command('/usr/bin/codesign',['--force','--sign','-','--options','runtime',
+        '--identifier',ids.worker,
+        '--entitlements',join(root,'native','macos','SandboxProbe.entitlements'),
+        bundle],'Ad-hoc '+which+' worker signature');
+      command('/usr/bin/codesign',['--force','--sign','-','--options','runtime',
+        '--identifier',ids.host,app],'Ad-hoc '+which+' host signature');
       command('/usr/bin/codesign',['--verify','--strict','--deep',app],
-        'Nested app signature');
-      command('/usr/bin/codesign',['--verify','--strict',bundle],
-        'Worker signature');
+        which+' nested app seal');
       const ent=command('/usr/bin/codesign',
         ['--display','--entitlements','-','--xml',bundle],
-        'Worker entitlements');
+        'Worker App Sandbox entitlement');
       inspectMinimalWorkerEntitlements(ent.stdout+'\n'+ent.stderr);
+      return {app,host,worker,bundle,ids};
     };
-    workerBuild(false);
-    signWorker();
-    signHost();
-    verify();
-    workspace=readNativeRoot(host);
-    console.log('PASS: Baseline ad-hoc native host reached the separate private notes worker.');
-    armedPath=join(workspace,armedName);
-    deliveredPath=join(workspace,deliveredName);
-    // Only remove named markers inside the independently validated disposable
-    // service container; no directories, arbitrary user files or source data.
-    rmSync(armedPath,{force:true});
-    rmSync(deliveredPath,{force:true});
-    workerBuild(true);
-    signWorker();
-    signHost();
-    verify();
-    console.log('PASS: Test worker re-signed with inbound peer requirement fixture.');
-    trial=dispatch(host);
+    const baseline=buildVariant('baseline');
+    const restricted=buildVariant('restricted');
+    const baselineRoot=readNativeRoot(baseline.host);
+    console.log('PASS: Separate ad-hoc baseline host reached its private notes worker.');
+    console.log('PASS: Distinct, nested restricted worker built and signed without replacing running XPC code.');
+
+    /*
+     * Obtain the restricted container location solely by substituting the
+     * verified bundle identity in the baseline's canonical worker-reported
+     * scratch path. Never treat an arbitrary host-supplied root as proof.
+     * If macOS uses a different layout, stop rather than guess.
+     */
+    const baselineTail='/Library/Containers/'+identities.baseline.worker+
+      '/Data/Documents/AgentBlackBoxScratchNotes';
+    if(!baselineRoot.endsWith(baselineTail))
+      throw Error('Baseline XPC container does not have expected worker bundle identity.');
+    restrictedRoot=baselineRoot.slice(0,-baselineTail.length)+
+      '/Library/Containers/'+identities.restricted.worker+
+      '/Data/Documents/AgentBlackBoxScratchNotes';
+    armedPath=join(restrictedRoot,armedName);
+    deliveredPath=join(restrictedRoot,deliveredName);
+    // Only clean exact markers in an already independently verified private
+    // container. The actual worker must recreate the marker after setup.
+    if(existsSync(restrictedRoot)){
+      validateMacWorkspaceBinding({configuredRoot:restrictedRoot,
+        reportedRoot:restrictedRoot});
+      rmSync(armedPath,{force:true});
+      rmSync(deliveredPath,{force:true});
+    }
+
+    trial=dispatch(restricted.host);
     let armedPid=0;
     const began=Date.now();
     while(Date.now()-began<7000){
       const current=trial.observe();
-      if(current.error||current.exited||current.overflow)
-        throw Error('Restricted native host terminated before worker identity was armed.');
+      if(current.error||current.overflow)
+        throw Error('Untrusted native host failed to start cleanly.');
       if(existsSync(deliveredPath))
-        throw Error('Untrusted host request reached native message handler.');
+        throw Error('Restricted worker received an unauthorized message.');
       if(existsSync(armedPath)){
+        validateMacWorkspaceBinding({configuredRoot:restrictedRoot,
+          reportedRoot:restrictedRoot});
         const match=/^([1-9][0-9]{0,9})\n$/.exec(readFileSync(armedPath,'utf8'));
         if(!match)throw Error('Malformed worker-owned signing requirement marker.');
         armedPid=Number(match[1]);
         break;
       }
+      // Deliberately do not abort merely because the host exited: Apple may
+      // return a typed XPC error for an unauthorized incoming connection.
       await sleep(40);
     }
-    if(!armedPid)throw Error('Worker did not prove OS peer-requirement installation.');
+    if(!armedPid){
+      const outcome=trial.observe();
+      throw Error('No verified worker-side signing requirement marker; '+JSON.stringify({
+        hostExited:outcome.exited,exitCode:outcome.code,exitSignal:outcome.signal,
+        hostOutput:outcome.stdout.slice(0,100),
+        hostError:outcome.stderr.slice(0,250),
+        restrictedContainerExists:existsSync(restrictedRoot)
+      }));
+    }
     if(!liveWorker(armedPid))
-      throw Error('Worker died after arming its incoming XPC signing requirement.');
-    console.log('PASS: Real sandboxed worker installed inbound signing requirement and remained alive.');
-    // Incoming peer rejection is *silent* by Apple design. Therefore require
-    // BOTH a worker-owned armed marker and a LIVE worker while its request
-    // remains blocked. Never count a generic timeout as authentication.
+      throw Error('Worker died after installing its incoming signing requirement.');
+    console.log('PASS: Restricted native worker installed peer identity gate and remained alive.');
     await sleep(1100);
     const current=trial.observe();
     assessInboundPeerRejection({
       armedPid,workerMarkerFresh:existsSync(armedPath),
       workerAlive:liveWorker(armedPid),deliverySeen:existsSync(deliveredPath),
-      hostRunning:!current.exited && !current.error && !current.overflow,
-      hostAnswered:current.stdout.length>0
+      hostAttempted:current.stderr.includes('BBX_INBOUND_REQUEST_ATTEMPTED'),
+      hostStdout:current.stdout,hostStderr:current.stderr,
+      hostExited:current.exited,hostExitCode:current.code,
+      hostExitSignal:current.signal,hostError:current.error,
+      hostOverflow:current.overflow
     });
-    console.log('PASS: Live worker never delivered the ad-hoc host request to its handler.');
-    console.log('PASS: No worker data was returned to the unauthorized host.');
-    console.log('PASS: OS-enforced inbound peer-identity rejection accepted (synthetic-only).');
-    console.log('NOTE: Positive Developer ID trust and production reciprocal identity remain pending.');
+    console.log('PASS: Unauthorized host request never reached the live worker handler.');
+    console.log('PASS: Unauthorized host received no successful worker response.');
+    console.log('PASS: Worker-side OS peer requirement negative acceptance (synthetic-only).');
+    console.log('NOTE: Developer ID positive mutual trust and production signing remain pending.');
   } finally {
     if(trial){
       try{trial.child.kill('SIGKILL');}catch{}
       await trial.completion;
     }
-    if(armedPath)rmSync(armedPath,{force:true});
-    if(deliveredPath)rmSync(deliveredPath,{force:true});
+    if(restrictedRoot && existsSync(restrictedRoot)){
+      try{
+        validateMacWorkspaceBinding({configuredRoot:restrictedRoot,
+          reportedRoot:restrictedRoot});
+        if(armedPath)rmSync(armedPath,{force:true});
+        if(deliveredPath)rmSync(deliveredPath,{force:true});
+      }catch(error){
+        console.error('Marker cleanup not performed: '+error.message);
+      }
+    }
     rmSync(dir,{recursive:true,force:true});
   }
 }

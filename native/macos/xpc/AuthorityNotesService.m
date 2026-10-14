@@ -274,7 +274,7 @@ static void accept_peer(xpc_connection_t peer) {
      * same-Team-ID peer. No ordinary release builds contain this fixture.
      */
     int peerGate=bbx_install_same_team_peer_requirement(
-        peer,"dev.agentblackbox.xpc-inbound.host");
+        peer,"dev.agentblackbox.xpc-inbound-restricted.host");
     if(peerGate!=0 ||
        !bbx_inbound_peer_marker("bbx-test-inbound-armed.txt")){
         xpc_connection_cancel(peer);
