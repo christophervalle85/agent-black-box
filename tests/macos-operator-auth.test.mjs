@@ -49,8 +49,9 @@ test('native helper relies on real Apple policy and never a mock approval flag',
   const harness=readFileSync(new URL('../examples/mcp-macos-operator-auth.mjs',import.meta.url),'utf8');
   const server=readFileSync(new URL('../src/server.mjs',import.meta.url),'utf8');
   assert.match(source,/#import <LocalAuthentication\/LocalAuthentication\.h>/);
-  assert.match(source,/canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication/);
-  assert.match(source,/evaluatePolicy:LAPolicyDeviceOwnerAuthentication/);
+  assert.match(source,/const LAPolicy policy=touchIDOnly/);
+  assert.match(source,/canEvaluatePolicy:policy/);
+  assert.match(source,/evaluatePolicy:policy/);
   assert.match(source,/LAErrorUserCancel/);
   assert.match(source,/LAPolicyDeviceOwnerAuthenticationWithBiometrics/);
   assert.match(source,/touchIDOnly\?/);
