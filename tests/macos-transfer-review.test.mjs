@@ -71,7 +71,7 @@ test('approved export still rejects changed operation, name, digest, nonce and b
 });
 test('deny, cancellation, expiry and shutdown are irrevocable',()=>{
   const f=fixture();
-  const deny=f.host?.request??f.pair.host.request(f.intent());
+  const deny=f.pair.host.request(f.intent());
   assert.equal(f.pair.controller.decide(deny.reviewId,'deny'),true);
   assert.equal(f.pair.controller.decide(deny.reviewId,'approve'),false);
   const cancelled=f.pair.host.request(f.intent());
