@@ -432,3 +432,21 @@ I found that an experimental same-origin HTTP decision could previously mark syn
 The new opt-in experimentalMacTransferOperatorVerify callback is supplied by trusted **in-process** application code and receives only the immutable, path-free review intent, review ID and approve/deny decision. Without a verifier, POST decisions return 403 and no synthetic grant becomes approved. The normal server continues with all synthetic transfer functionality disabled. A verifier that rejects, errors, or fails to return exactly true cannot authorize anything. Verification runs before the existing HMAC-audited decision call, with a 15-second abort deadline, no double prompt for the same pending review, and a fresh review/expiry check after the callback finishes. Client disconnect, host cancellation, stale reviews and server shutdown cannot revive an unconsumed grant. Approval grants remain in-memory, single-use and digest-bound, and no OS document transfer or HTTP creation/consumption capability was added.
 
 **Not production authentication:** the callback is deliberately a narrow integration seam, not an actual Apple LocalAuthentication implementation. Injecting a test mock that returns true proves the control flow only. A future audited, natively authenticated, user-initiated operation must implement the real verifier plus a trusted macOS document picker and signed host/worker transport before any real file access. MCP_SANDBOX=required remains fail-closed.
+
+### Phase 5 macOS device-owner authentication — actual OS acceptance pending
+
+A new **standalone, opt-in, disposable** native acceptance harness tests Apple's LocalAuthentication framework directly on the developer's Mac. The helper source is `native/macos/LocalOperatorAuthentication.m`; `examples/mcp-macos-operator-auth.mjs` compiles it with Xcode's macOS SDK, signs the disposable executable ad-hoc, verifies the code signature, and then invokes a fixed-mode test that calls `LAContext canEvaluatePolicy` and `evaluatePolicy` with `LAPolicyDeviceOwnerAuthentication`. This OS policy may use Touch ID, a nearby Apple Watch or the Mac account password, depending on system configuration. This is **device-owner authentication**, not proof of a particular named operator's identity, and Apple's dialog remains user-controlled. The helper uses a fresh context with biometric reuse duration 0 and a bounded 75-second native wait.
+
+All commands require `MCP_SANDBOX=off` because they are ad-hoc-signed **experiments**, not production sandboxed operations. A real interactive macOS login session is necessary. Commands must be run individually:
+
+```sh
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- probe
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- approve
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- cancel
+```
+
+`probe` must report that the OS device-owner policy is available, without prompting. For `approve`, complete the native OS prompt; an exact OS success is required. For `cancel`, actively click Cancel in the OS prompt; **only** Apple's `LAErrorUserCancel` result counts as a negative pass. Incorrect passwords, unavailable policies, crashes, missing prompts, helper timeouts and unexpectedly successful authentication are **not** accepted as cancellation evidence. The fixture prints only fixed markers and does not accept user paths, process tool arguments, arbitrary prompt reasons, content or approvals. Its temporary executable is removed in cleanup.
+
+**This is NOT yet integrated with an actual transfer approval.** No real OS-authentication verdict is currently bound to the digest/nonce-bound Phase 5 review, no local controller invokes this helper, no signed approval token exists, no file picker or user document is accessed, and `MCP_SANDBOX=required` remains fail-closed. A successful prompt in this fixture will justify implementing a trustworthy native review-bound verifier, not enabling transfers. CLI ad-hoc signing is not Developer ID production signing.
+
+The pure Node verdict tests run in CI on Linux, but **only a human executing the three commands on macOS** can establish OS user-presence acceptance. Record each result separately and mark the native gate accepted only after all three complete successfully.

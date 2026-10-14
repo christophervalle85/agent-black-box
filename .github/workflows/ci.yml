@@ -31,6 +31,7 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-peer-negative.mjs
       - run: node --check examples/mcp-macos-xpc-notes-isolation.mjs
       - run: node --check examples/mcp-macos-xpc-inbound-peer-negative.mjs
+      - run: node --check examples/mcp-macos-operator-auth.mjs
       - run: node --check src/macos-signer-trust.mjs
       - run: node --check src/macos-transfer-intent.mjs
       - run: node --check src/macos-transfer-review.mjs
