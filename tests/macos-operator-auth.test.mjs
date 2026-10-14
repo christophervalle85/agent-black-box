@@ -6,7 +6,10 @@ import {assessMacOperatorAuth} from '../examples/mcp-macos-operator-auth.mjs';
 const evidence=Object.freeze({
   probe:{status:0,stdout:'BBX_LOCAL_AUTH_AVAILABLE\n',stderr:''},
   approve:{status:0,stdout:'BBX_LOCAL_AUTH_SUCCEEDED\n',stderr:''},
-  cancel:{status:83,stdout:'BBX_LOCAL_AUTH_USER_CANCELLED\n',stderr:''}
+  cancel:{status:83,stdout:'BBX_LOCAL_AUTH_USER_CANCELLED\n',stderr:''},
+  'touchid-probe':{status:0,stdout:'BBX_LOCAL_AUTH_TOUCHID_AVAILABLE\n',stderr:''},
+  'touchid-approve':{status:0,stdout:'BBX_LOCAL_AUTH_TOUCHID_SUCCEEDED\n',stderr:''},
+  'touchid-cancel':{status:83,stdout:'BBX_LOCAL_AUTH_TOUCHID_USER_CANCELLED\n',stderr:''}
 });
 test('OS-auth success and native user-cancellation require distinct exact evidence',()=>{
   for(const mode of Object.keys(evidence))
@@ -14,6 +17,16 @@ test('OS-auth success and native user-cancellation require distinct exact eviden
   assert.throws(()=>assessMacOperatorAuth('invalid',evidence.probe));
   assert.throws(()=>assessMacOperatorAuth('approve',evidence.cancel));
   assert.throws(()=>assessMacOperatorAuth('cancel',evidence.approve));
+  assert.throws(()=>assessMacOperatorAuth('cancel',evidence['touchid-cancel']));
+  assert.throws(()=>assessMacOperatorAuth('touchid-cancel',evidence.cancel));
+  assert.throws(()=>assessMacOperatorAuth('touchid-cancel',evidence['touchid-approve']));
+  assert.throws(()=>assessMacOperatorAuth('touchid-approve',evidence['touchid-cancel']));
+  assert.throws(()=>assessMacOperatorAuth('touchid-cancel',{
+    status:85,stdout:'BBX_LOCAL_AUTH_TOUCHID_UNEXPECTED_SUCCESS\n',stderr:''
+  }));
+  assert.throws(()=>assessMacOperatorAuth('touchid-probe',{
+    status:88,stdout:'BBX_LOCAL_AUTH_TOUCHID_UNAVAILABLE\n',stderr:''
+  }));
   assert.throws(()=>assessMacOperatorAuth('cancel',{
     ...evidence.cancel,status:87,stdout:'BBX_LOCAL_AUTH_DENIED_OR_UNAVAILABLE\n'
   }));
@@ -39,6 +52,11 @@ test('native helper relies on real Apple policy and never a mock approval flag',
   assert.match(source,/canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication/);
   assert.match(source,/evaluatePolicy:LAPolicyDeviceOwnerAuthentication/);
   assert.match(source,/LAErrorUserCancel/);
+  assert.match(source,/LAPolicyDeviceOwnerAuthenticationWithBiometrics/);
+  assert.match(source,/touchIDOnly\?/);
+  assert.match(source,/BBX_LOCAL_AUTH_TOUCHID_UNEXPECTED_SUCCESS/);
+  assert.match(source,/BBX_LOCAL_AUTH_TOUCHID_UNAVAILABLE/);
+  assert.match(harness,/touchid-cancel/);
   assert.match(source,/touchIDAuthenticationAllowableReuseDuration=0/);
   assert.match(source,/dispatch_semaphore_wait/);
   assert.match(source,/BBX_LOCAL_AUTH_TIMED_OUT/);

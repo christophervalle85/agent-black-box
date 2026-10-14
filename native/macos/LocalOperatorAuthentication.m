@@ -21,29 +21,47 @@ static int fail(const char *marker,int code) {
 }
 int main(int argc,const char *argv[]) {
     @autoreleasepool {
-        if(argc!=2 || (strcmp(argv[1],"probe")!=0 &&
-           strcmp(argv[1],"approve")!=0 && strcmp(argv[1],"cancel")!=0))
+        if(argc!=2)return fail("BBX_LOCAL_AUTH_BAD_ARGS",90);
+        /*
+         * The generic device-owner policy can succeed via a paired Apple
+         * Watch, Touch ID, or account password. For cancellation diagnostics,
+         * offer a separately labeled biometric-only policy that deliberately
+         * excludes Watch/password fallback. Never silently switch policy.
+         */
+        const BOOL touchIDOnly=strncmp(argv[1],"touchid-",8)==0;
+        const char *action=touchIDOnly?argv[1]+8:argv[1];
+        if(strcmp(action,"probe")!=0 &&
+           strcmp(action,"approve")!=0 && strcmp(action,"cancel")!=0)
             return fail("BBX_LOCAL_AUTH_BAD_ARGS",90);
-        const BOOL probe=strcmp(argv[1],"probe")==0;
-        const BOOL requireSuccess=strcmp(argv[1],"approve")==0;
+        const BOOL probe=strcmp(action,"probe")==0;
+        const BOOL requireSuccess=strcmp(action,"approve")==0;
+        const LAPolicy policy=touchIDOnly?
+            LAPolicyDeviceOwnerAuthenticationWithBiometrics:
+            LAPolicyDeviceOwnerAuthentication;
         LAContext *context=[[LAContext alloc]init];
         // Request a fresh Touch ID interaction, never intentionally reuse a
         // cached biometric success from this synthetic test context.
         context.touchIDAuthenticationAllowableReuseDuration=0;
         NSError *preflightError=nil;
-        if(![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication
-                                 error:&preflightError]) {
+        if(![context canEvaluatePolicy:policy error:&preflightError]) {
+            // No fallback to password/Watch for biometric-only experiments.
             // Deliberately omit localized error/user/account details.
-            return fail("BBX_LOCAL_AUTH_UNAVAILABLE",82);
+            return touchIDOnly?
+                fail("BBX_LOCAL_AUTH_TOUCHID_UNAVAILABLE",88):
+                fail("BBX_LOCAL_AUTH_UNAVAILABLE",82);
         }
-        if(probe)return fail("BBX_LOCAL_AUTH_AVAILABLE",0);
+        if(probe)return touchIDOnly?
+            fail("BBX_LOCAL_AUTH_TOUCHID_AVAILABLE",0):
+            fail("BBX_LOCAL_AUTH_AVAILABLE",0);
 
-        NSString *reason=@"Agent Black Box synthetic bbx-test-auth.txt review; no file will be changed.";
+        NSString *reason=touchIDOnly?
+            @"Agent Black Box Touch ID only: synthetic authentication; no files changed.":
+            @"Agent Black Box synthetic bbx-test-auth.txt review; no file will be changed.";
         dispatch_semaphore_t completed=dispatch_semaphore_create(0);
         __block BOOL succeeded=NO;
         __block NSInteger errorCode=0;
         __block BOOL localAuthenticationError=NO;
-        [context evaluatePolicy:LAPolicyDeviceOwnerAuthentication
+        [context evaluatePolicy:policy
                  localizedReason:reason
                            reply:^(BOOL success,NSError *error) {
             succeeded=success && error==nil;
@@ -60,15 +78,24 @@ int main(int argc,const char *argv[]) {
         }
         [context invalidate];
         if(succeeded) {
-            if(requireSuccess)return fail("BBX_LOCAL_AUTH_SUCCEEDED",0);
-            // In the explicit negative test, a successful OS evaluation
-            // must NEVER be accepted as cancellation.
-            return fail("BBX_LOCAL_AUTH_UNEXPECTED_SUCCESS",85);
+            if(requireSuccess)return touchIDOnly?
+                fail("BBX_LOCAL_AUTH_TOUCHID_SUCCEEDED",0):
+                fail("BBX_LOCAL_AUTH_SUCCEEDED",0);
+            // Successful authentication is NEVER cancellation evidence.
+            return touchIDOnly?
+                fail("BBX_LOCAL_AUTH_TOUCHID_UNEXPECTED_SUCCESS",85):
+                fail("BBX_LOCAL_AUTH_UNEXPECTED_SUCCESS",85);
         }
         if(localAuthenticationError && errorCode==LAErrorUserCancel) {
-            if(!requireSuccess)return fail("BBX_LOCAL_AUTH_USER_CANCELLED",83);
-            return fail("BBX_LOCAL_AUTH_CANCELLED_WHEN_SUCCESS_REQUIRED",86);
+            if(!requireSuccess)return touchIDOnly?
+                fail("BBX_LOCAL_AUTH_TOUCHID_USER_CANCELLED",83):
+                fail("BBX_LOCAL_AUTH_USER_CANCELLED",83);
+            return touchIDOnly?
+                fail("BBX_LOCAL_AUTH_TOUCHID_CANCELLED_WHEN_SUCCESS_REQUIRED",86):
+                fail("BBX_LOCAL_AUTH_CANCELLED_WHEN_SUCCESS_REQUIRED",86);
         }
-        return fail("BBX_LOCAL_AUTH_DENIED_OR_UNAVAILABLE",87);
+        return touchIDOnly?
+            fail("BBX_LOCAL_AUTH_TOUCHID_DENIED_OR_UNAVAILABLE",87):
+            fail("BBX_LOCAL_AUTH_DENIED_OR_UNAVAILABLE",87);
     }
 }

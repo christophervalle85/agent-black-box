@@ -450,3 +450,21 @@ MCP_SANDBOX=off npm run mcp:mac-operator-auth -- cancel
 **This is NOT yet integrated with an actual transfer approval.** No real OS-authentication verdict is currently bound to the digest/nonce-bound Phase 5 review, no local controller invokes this helper, no signed approval token exists, no file picker or user document is accessed, and `MCP_SANDBOX=required` remains fail-closed. A successful prompt in this fixture will justify implementing a trustworthy native review-bound verifier, not enabling transfers. CLI ad-hoc signing is not Developer ID production signing.
 
 The pure Node verdict tests run in CI on Linux, but **only a human executing the three commands on macOS** can establish OS user-presence acceptance. Record each result separately and mark the native gate accepted only after all three complete successfully.
+
+### October 14, 2026 — owner-auth cancellation is NOT accepted; isolate biometric-only policy
+
+On my Mac, the disposable `mcp:mac-operator-auth` fixture passed both `probe` and `approve` using `LAPolicyDeviceOwnerAuthentication`, but the requested `cancel` mode returned **status 85 / BBX_LOCAL_AUTH_UNEXPECTED_SUCCESS**. This is an OS authentication **success**, *not* a `LAErrorUserCancel` response, so the strict negative verifier correctly rejected it. This is **not** evidence that the local operator's explicit cancellation was ignored by the OS: the output cannot identify the mechanism or prove when/whether a dialog appeared. Apple documents that the generic device-owner policy on macOS can attempt Touch ID and Apple Watch authentication in parallel, with password fallback. A successful Watch (or other configured mechanism) can race a cancellation attempt. The existing `touchIDAuthenticationAllowableReuseDuration=0` disables Touch ID device-unlock reuse; it does not prove that other allowed authentication paths cannot succeed.
+
+I added three explicitly labeled **biometric-only** modes using the Apple `LAPolicyDeviceOwnerAuthenticationWithBiometrics` policy, without Watch/password fallback:
+
+```sh
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- touchid-probe
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- touchid-approve
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- touchid-cancel
+```
+
+These require enrolled and available Touch ID on the test Mac. In `touchid-approve`, authenticate with the enrolled finger. In `touchid-cancel`, **do not touch the sensor**; click the OS prompt's Cancel button. The negative test passes only if the callback supplies `LAErrorUserCancel` and the helper exits with **83** plus an exact, biometric-specific marker. Any unexpected successful authentication, unavailable policy, different error, invalid signature, timeout or absent GUI interaction remains **NOT ACCEPTED**. Biometrics-only tests do not retroactively pass the earlier generic owner-auth cancellation; results must be tracked separately and the production device-owner policy must be checked in its final configuration.
+
+If `touchid-probe` is unavailable on hardware without Touch ID or enrollment, stop: do not weaken the test or interpret an unavailable biometric policy as a successful cancellation. The prior generic `approve` evidence remains accepted; generic `cancel` is unresolved. No native proof is wired into the Phase 5 approval controller, and no file access, MCP transfer or macOS required-mode behavior is enabled.
+
+Apple references: [deviceOwnerAuthentication](https://developer.apple.com/documentation/localauthentication/lapolicy/deviceownerauthentication), [deviceOwnerAuthenticationWithBiometrics](https://developer.apple.com/documentation/localauthentication/lapolicy/deviceownerauthenticationwithbiometrics/), [LAErrorUserCancel](https://developer.apple.com/documentation/localauthentication/laerror/laerrorusercancel).

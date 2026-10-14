@@ -17,7 +17,10 @@ const source=join(root,'native','macos','LocalOperatorAuthentication.m');
 const markerFor=Object.freeze({
   probe:{status:0,marker:'BBX_LOCAL_AUTH_AVAILABLE\n'},
   approve:{status:0,marker:'BBX_LOCAL_AUTH_SUCCEEDED\n'},
-  cancel:{status:83,marker:'BBX_LOCAL_AUTH_USER_CANCELLED\n'}
+  cancel:{status:83,marker:'BBX_LOCAL_AUTH_USER_CANCELLED\n'},
+  'touchid-probe':{status:0,marker:'BBX_LOCAL_AUTH_TOUCHID_AVAILABLE\n'},
+  'touchid-approve':{status:0,marker:'BBX_LOCAL_AUTH_TOUCHID_SUCCEEDED\n'},
+  'touchid-cancel':{status:83,marker:'BBX_LOCAL_AUTH_TOUCHID_USER_CANCELLED\n'}
 });
 export function assessMacOperatorAuth(mode,{
   status,stdout='',stderr='',error=null,signal=null
@@ -48,7 +51,7 @@ async function main(){
     throw Error('Explicit MCP_SANDBOX=off required for this disposable native test.');
   const mode=process.argv[2];
   if(process.argv.length!==3 || !Object.hasOwn(markerFor,mode))
-    throw Error('Expected one mode: probe, approve, or cancel.');
+    throw Error('Expected probe, approve, cancel, touchid-probe, touchid-approve or touchid-cancel.');
   const temp=mkdtempSync(join(tmpdir(),'bb-local-auth-'));
   try{
     const executable=join(temp,'BlackBoxLocalAuthFixture');
@@ -71,9 +74,13 @@ async function main(){
     if(check.status!==0)throw Error('Disposable helper signature did not verify.');
     console.log('PASS: Disposable LocalAuthentication helper compiled and ad-hoc signature verified.');
     if(mode==='approve')
-      console.log('ACTION: Complete the macOS authentication prompt to prove device-owner authorization.');
+      console.log('ACTION: Authenticate using macOS Touch ID, Watch, or password as configured.');
     if(mode==='cancel')
-      console.log('ACTION: Click Cancel in the macOS authentication prompt; do not authenticate.');
+      console.log('ACTION: Click Cancel in the macOS prompt; avoid Touch ID / Apple Watch confirmation.');
+    if(mode==='touchid-approve')
+      console.log('ACTION: Use your enrolled Touch ID finger to authenticate; this mode excludes Watch/password fallback.');
+    if(mode==='touchid-cancel')
+      console.log('ACTION: Click Cancel on the Touch ID prompt WITHOUT touching the sensor; Watch/password fallback is excluded.');
     const output=run(executable,[mode],{timeout:90000});
     assessMacOperatorAuth(mode,output);
     if(mode==='probe')
@@ -81,7 +88,13 @@ async function main(){
     if(mode==='approve')
       console.log('PASS: Real macOS device-owner authentication succeeded; synthetic-only.');
     if(mode==='cancel')
-      console.log('PASS: Real macOS user cancellation was rejected; synthetic-only.');
+      console.log('PASS: Real macOS device-owner policy returned an explicit user-cancel result; synthetic-only.');
+    if(mode==='touchid-probe')
+      console.log('PASS: macOS biometric-only authentication is available (Touch ID enrolled).');
+    if(mode==='touchid-approve')
+      console.log('PASS: Real macOS biometric-only authentication succeeded; synthetic-only.');
+    if(mode==='touchid-cancel')
+      console.log('PASS: Real macOS biometric-only user cancellation was rejected; synthetic-only.');
     console.log('NOTE: OS identity is not bound to any controller approval, picker or XPC transfer.');
   } finally {
     rmSync(temp,{recursive:true,force:true});
