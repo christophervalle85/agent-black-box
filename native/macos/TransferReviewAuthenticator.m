@@ -93,13 +93,13 @@ int main(int argc,const char *argv[]){
         }
         [context invalidate];
         if(succeeded){
-            printf("BBX_TRANSFER_TOUCHID_AUTHENTICATED %s %s %s\n",
-                   argv[1],argv[6],argv[5]);
+            printf("BBX_TRANSFER_TOUCHID_AUTHENTICATED %s %s %s %s %s %s\n",
+                   argv[1],argv[6],argv[5],argv[2],argv[3],argv[4]);
             return 0;
         }
         if(userCancelled){
-            printf("BBX_TRANSFER_TOUCHID_USER_CANCELLED %s %s\n",
-                   argv[1],argv[6]);
+            printf("BBX_TRANSFER_TOUCHID_USER_CANCELLED %s %s %s %s %s %s\n",
+                   argv[1],argv[6],argv[5],argv[2],argv[3],argv[4]);
             return 83;
         }
         puts("BBX_TRANSFER_AUTH_DENIED");

@@ -20,12 +20,14 @@ function review(){
 function success(r){
   return {status:0,signal:null,stderr:'',stdout:
     'BBX_TRANSFER_TOUCHID_AUTHENTICATED '+r.reviewId+' '+
-    r.intent.nonce+' '+r.intent.sha256+'\n'};
+    r.intent.nonce+' '+r.intent.sha256+' '+r.intent.operation+' '+
+    r.intent.noteName+' '+r.intent.byteLength+'\n'};
 }
 function cancelled(r){
   return {status:83,signal:null,stderr:'',stdout:
     'BBX_TRANSFER_TOUCHID_USER_CANCELLED '+r.reviewId+' '+
-    r.intent.nonce+'\n'};
+    r.intent.nonce+' '+r.intent.sha256+' '+r.intent.operation+' '+
+    r.intent.noteName+' '+r.intent.byteLength+'\n'};
 }
 test('real-native review receipt requires matching review ID, intent nonce and full digest',()=>{
   const r=review();

@@ -24,8 +24,10 @@ export function assessNativeMacTransferTouchId(context,observed,{now=Date.now()}
   if(!observed || observed.error || observed.signal ||
      observed.stderr!=='' || typeof observed.stdout!=='string')
     throw Error('Native Touch ID helper failed or produced unexpected diagnostics.');
-  const success='BBX_TRANSFER_TOUCHID_AUTHENTICATED '+id+' '+intent.nonce+' '+intent.sha256+'\n';
-  const cancelled='BBX_TRANSFER_TOUCHID_USER_CANCELLED '+id+' '+intent.nonce+'\n';
+  const fields=[id,intent.nonce,intent.sha256,intent.operation,
+    intent.noteName,String(intent.byteLength)].join(' ');
+  const success='BBX_TRANSFER_TOUCHID_AUTHENTICATED '+fields+'\n';
+  const cancelled='BBX_TRANSFER_TOUCHID_USER_CANCELLED '+fields+'\n';
   if(observed.status===0 && observed.stdout===success)return 'authenticated';
   if(observed.status===83 && observed.stdout===cancelled)return 'cancelled';
   throw Error('Native Touch ID did not supply accepted, review-bound OS evidence.');
