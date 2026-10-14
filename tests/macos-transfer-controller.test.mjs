@@ -124,5 +124,9 @@ test('changed payload burns approval before another attempt; no transfer is perf
     }),/digest/);
     assert.throws(()=>host.consume({reviewId:review.reviewId,intent,bytes:payload()}),
       /No unconsumed/);
+    const events=ctx.store.list({limit:20});
+    assert.equal(events.some(e=>e.ruleId==='MAC_TRANSFER_CONSUMPTION_DENIED' &&
+      e.decision==='block' && e.outcome==='blocked'),true);
+    assert.equal(events.some(e=>e.ruleId==='MAC_TRANSFER_CONSUMED'),false);
   }
 ));

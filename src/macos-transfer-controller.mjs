@@ -43,7 +43,16 @@ export function createAuditedMacTransferController({store,clock=Date.now}={}) {
       if(!review)throw Error('No unconsumed transfer approval.');
       audit(review,'MAC_TRANSFER_CONSUMPTION_ATTEMPT','review','pending',
         'Staged transfer validation requested; no native file access.');
-      const result=queue.host.consume({reviewId,intent,bytes});
+      let result;
+      try {
+        result=queue.host.consume({reviewId,intent,bytes});
+      } catch(error) {
+        // The review has already been burned. Record a definitive denial,
+        // never leave a forged/altered attempt looking like success.
+        audit(review,'MAC_TRANSFER_CONSUMPTION_DENIED','block','blocked',
+          'Synthetic approval or payload validation denied; no OS transfer.');
+        throw error;
+      }
       audit(review,'MAC_TRANSFER_CONSUMED','allow','simulated',
         'One-time synthetic grant validated; no OS transfer occurred.');
       return result;
