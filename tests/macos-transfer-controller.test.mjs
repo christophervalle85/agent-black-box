@@ -45,7 +45,7 @@ test('new transfer controller endpoints remain disabled in the ordinary server',
     {headers:{Origin:ctx.base}})).status,404);
 }));
 test('only in-process host can create; same-origin local decision is required; HMAC records omit bytes',()=>fixture(
-  {experimentalMacTransferReviews:true},async ctx=>{
+  {experimentalMacTransferReviews:true, experimentalMacTransferOperatorVerify: async ()=>true},async ctx=>{
     const {macTransferHost:host,base,store}=ctx;
     assert.ok(host);
     const intent=createIntent();
@@ -81,7 +81,7 @@ test('only in-process host can create; same-origin local decision is required; H
   }
 ));
 test('denial, cancel and expiry deny synthetic request without creating OS files',()=>fixture(
-  {experimentalMacTransferReviews:true},async ctx=>{
+  {experimentalMacTransferReviews:true, experimentalMacTransferOperatorVerify: async ()=>true},async ctx=>{
     const {macTransferHost:host,base,store,dir}=ctx;
     const denied=createIntent('export');
     const review=host.request(denied);
@@ -99,7 +99,7 @@ test('denial, cancel and expiry deny synthetic request without creating OS files
   }
 ));
 test('tampered HMAC audit blocks creation, decision and consumption',()=>fixture(
-  {experimentalMacTransferReviews:true},async ctx=>{
+  {experimentalMacTransferReviews:true, experimentalMacTransferOperatorVerify: async ()=>true},async ctx=>{
     const {macTransferHost:host,base,store}=ctx;
     const first=createIntent(),r=host.request(first);
     const log=readFileSync(store.filename,'utf8');
@@ -113,7 +113,7 @@ test('tampered HMAC audit blocks creation, decision and consumption',()=>fixture
   }
 ));
 test('changed payload burns approval before another attempt; no transfer is performed',()=>fixture(
-  {experimentalMacTransferReviews:true},async ctx=>{
+  {experimentalMacTransferReviews:true, experimentalMacTransferOperatorVerify: async ()=>true},async ctx=>{
     const {macTransferHost:host,base}=ctx;
     const intent=createIntent('export'),review=host.request(intent);
     assert.equal((await decide(base,review.reviewId,'approve',
@@ -130,3 +130,85 @@ test('changed payload burns approval before another attempt; no transfer is perf
     assert.equal(events.some(e=>e.ruleId==='MAC_TRANSFER_CONSUMED'),false);
   }
 ));
+
+
+test('enabling experimental transfer reviews alone cannot approve a synthetic transfer',()=>fixture(
+  {experimentalMacTransferReviews:true},async ctx=>{
+    const review=ctx.macTransferHost.request(createIntent());
+    const response=await decide(ctx.base,review.reviewId,'approve',
+      {headers:{Origin:ctx.base}});
+    assert.equal(response.status,403);
+    assert.equal(ctx.macTransferHost.consume instanceof Function,true);
+    assert.throws(()=>ctx.macTransferHost.consume({
+      reviewId:review.reviewId,intent:review.intent,bytes:payload()
+    }),/did not approve/);
+    assert.equal(ctx.store.list({limit:10})
+      .some(e=>e.ruleId==='MAC_TRANSFER_APPROVED'),false);
+  }
+));
+test('trusted verifier must be explicitly injected, never inferred from a local Origin',()=>{
+  assert.throws(()=>createBlackBoxServer({
+    experimentalMacTransferOperatorVerify:async()=>true
+  }),/requires explicit experimental mode/);
+  assert.throws(()=>createBlackBoxServer({
+    experimentalMacTransferReviews:true,
+    experimentalMacTransferOperatorVerify:true
+  }),/trusted function/);
+  return fixture({
+    experimentalMacTransferReviews:true,
+    experimentalMacTransferOperatorVerify: async()=>false
+  },async ctx=>{
+    const intent=createIntent(),review=ctx.macTransferHost.request(intent);
+    assert.equal((await decide(ctx.base,review.reviewId,'approve',
+      {headers:{Origin:ctx.base}})).status,403);
+    assert.equal(ctx.store.list({limit:10})
+      .some(e=>e.ruleId==='MAC_TRANSFER_APPROVED'),false);
+    assert.throws(()=>ctx.macTransferHost.consume({
+      reviewId:review.reviewId,intent,bytes:payload()
+    }),/did not approve/);
+  });
+});
+test('the trusted verifier sees the exact immutable reviewed operation and never bytes or host paths',()=>fixture({
+  experimentalMacTransferReviews:true,
+  experimentalMacTransferOperatorVerify: async context=>{
+    assert.equal(Object.isFrozen(context),true);
+    assert.equal(Object.isFrozen(context.intent),true);
+    assert.equal(context.intent.operation,'export');
+    assert.equal(context.intent.noteName,'bbx-test-controller.txt');
+    assert.equal(context.decision,'approve');
+    assert.equal(JSON.stringify(context).includes('synthetic-only'),false);
+    assert.equal(Object.hasOwn(context,'bytes'),false);
+    assert.equal(Object.hasOwn(context,'path'),false);
+    return true;
+  }
+},async ctx=>{
+  const intent=createIntent('export'),review=ctx.macTransferHost.request(intent);
+  assert.equal((await decide(ctx.base,review.reviewId,'approve',
+    {headers:{Origin:ctx.base}})).status,200);
+  assert.equal(ctx.macTransferHost.consume({
+    reviewId:review.reviewId,intent,bytes:payload()
+  }),true);
+}));
+test('only one verification can be in flight and late approval cannot revive cancellation',async()=>{
+  let release,entered;
+  const enteredPromise=new Promise(resolve=>{entered=resolve;});
+  await fixture({
+    experimentalMacTransferReviews:true,
+    experimentalMacTransferOperatorVerify: async()=>{
+      entered();
+      return new Promise(resolve=>{release=resolve;});
+    }
+  },async ctx=>{
+    const intent=createIntent(),review=ctx.macTransferHost.request(intent);
+    const first=decide(ctx.base,review.reviewId,'approve',
+      {headers:{Origin:ctx.base}});
+    await enteredPromise;
+    assert.equal((await decide(ctx.base,review.reviewId,'approve',
+      {headers:{Origin:ctx.base}})).status,409);
+    assert.equal(ctx.macTransferHost.cancel(review.reviewId),true);
+    release(true);
+    assert.equal((await first).status,409);
+    assert.equal(ctx.store.list({limit:20})
+      .some(e=>e.ruleId==='MAC_TRANSFER_APPROVED'),false);
+  });
+});

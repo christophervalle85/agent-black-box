@@ -28,9 +28,13 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.jsonl'), workspaceRoot = join(root, 'demo-workspace'), agentClient = createOllamaClient(), experimentalMacTransferReviews = false } = {}) {
+export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.jsonl'), workspaceRoot = join(root, 'demo-workspace'), agentClient = createOllamaClient(), experimentalMacTransferReviews = false, experimentalMacTransferOperatorVerify = null } = {}) {
   if(typeof experimentalMacTransferReviews!=='boolean')
     throw Error('Experimental Mac transfer reviews must be an explicit boolean.');
+  if(experimentalMacTransferOperatorVerify!==null &&
+     (!experimentalMacTransferReviews ||
+      typeof experimentalMacTransferOperatorVerify!=='function'))
+    throw Error('Transfer verifier requires explicit experimental mode and a trusted function.');
   mkdirSync(workspaceRoot, { recursive: true });
   const store = new AuditStore(dataFile);
   const approvalQueue = new ApprovalQueue();
@@ -38,6 +42,9 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
   // A model/MCP client cannot open or consume reviews over HTTP.
   const macTransfer = experimentalMacTransferReviews
     ? createAuditedMacTransferController({store}) : null;
+  // Per-review decision lock; approval is never issued from an unchecked
+  // HTTP Origin header, even in explicitly opted-in synthetic tests.
+  const activeMacDecisions=new Map();
   // Ephemeral controller credential, file mode 0600. Rotate with every server start.
   // Not protection against hostile programs already running as the same OS user.
   const tokenFile = join(dirname(dataFile), 'mcp-controller-token');
@@ -107,12 +114,14 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
       ? /^\/api\/mac\/transfers\/([0-9a-f-]{36})\/decision$/i.exec(url.pathname)
       : null;
     if(req.method === 'POST' && macDecisionMatch){
-      // Same-origin local browser decision is NOT strong user authentication.
-      // A real native operator identity/picker gate remains mandatory before
-      // any OS file transfer is implemented. No HTTP route creates a review.
+      // This is a *synthetic* operator-presence integration seam.
+      // Same-origin JSON is only anti-CSRF, never operator authentication.
+      // In ordinary and opt-in-without-verifier modes, approval is impossible.
       if(req.headers.origin !== 'http://'+host ||
          !String(req.headers['content-type']??'').startsWith('application/json'))
-        return sendJson(res,403,{error:'Same-origin operator review required.'});
+        return sendJson(res,403,{error:'Same-origin review required.'});
+      if(!experimentalMacTransferOperatorVerify)
+        return sendJson(res,403,{error:'Trusted operator verification is not configured.'});
       let raw='';
       try {
         for await(const chunk of req){
@@ -127,11 +136,60 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
          Object.keys(body).length!==1 ||
          !['approve','deny'].includes(body.decision))
         return sendJson(res,400,{error:'Decision must be approve or deny.'});
+      const reviewId=macDecisionMatch[1];
+      if(activeMacDecisions.has(reviewId))
+        return sendJson(res,409,{error:'Transfer decision already in progress.'});
+      let review;
       try {
-        if(!macTransfer.controller.decide(macDecisionMatch[1],body.decision))
+        review=macTransfer.controller.pending().find(x=>x.reviewId===reviewId);
+      }catch{return sendJson(res,503,{error:'Transfer audit unavailable.'});}
+      if(!review)return sendJson(res,409,{error:'No pending transfer review.'});
+
+      const abort=new AbortController();
+      activeMacDecisions.set(reviewId,abort);
+      const onClose=()=>abort.abort();
+      res.once('close',onClose);
+      // A native user-presence callback may prompt asynchronously. A dead
+      // HTTP caller or a long-running prompt must not approve stale work.
+      const timer=setTimeout(()=>abort.abort(),15_000);
+      timer.unref?.();
+      const aborted=new Promise(resolve=>{
+        if(abort.signal.aborted)resolve(false);
+        else abort.signal.addEventListener('abort',()=>resolve(false),{once:true});
+      });
+      try {
+        // Only trusted IN-PROCESS callers can supply this function. It must
+        // independently verify the operator and the exact reviewed metadata.
+        // Tests inject a mock verifier; no native identity proof exists yet.
+        const context=Object.freeze({
+          reviewId:review.reviewId,intent:review.intent,decision:body.decision
+        });
+        const verified=await Promise.race([
+          Promise.resolve().then(()=>experimentalMacTransferOperatorVerify(context,
+            {signal:abort.signal})),
+          aborted
+        ]);
+        if(abort.signal.aborted || res.destroyed)return;
+        if(verified!==true)
+          return sendJson(res,403,{error:'Operator verification denied.'});
+        // Recheck the original unexpired pending review AFTER the verifier
+        // completes, and require identical metadata (not just a matching id).
+        const pending=macTransfer.controller.pending()
+          .find(x=>x.reviewId===review.reviewId);
+        if(!pending || JSON.stringify(pending.intent)!==JSON.stringify(review.intent))
+          return sendJson(res,409,{error:'Review changed or expired.'});
+        if(!macTransfer.controller.decide(review.reviewId,body.decision))
           return sendJson(res,409,{error:'No pending transfer review.'});
         return sendJson(res,200,{resolved:true,transferExecuted:false});
-      }catch{return sendJson(res,503,{error:'Audit unavailable; decision not granted.'});}
+      }catch{
+        if(!abort.signal.aborted && !res.destroyed)
+          return sendJson(res,503,{error:'Operator verification or audit failed.'});
+      }finally{
+        clearTimeout(timer);
+        res.off('close',onClose);
+        activeMacDecisions.delete(reviewId);
+      }
+      return;
     }
     const decisionMatch = /^\/api\/approvals\/([0-9a-f-]{36})\/decision$/i.exec(url.pathname);
     if (req.method === 'POST' && decisionMatch) {
@@ -280,6 +338,8 @@ export function createBlackBoxServer({ dataFile = join(root, 'data', 'audit.json
   const originalClose = server.close.bind(server);
   server.close = callback => {
     approvalQueue.close();
+    for(const pending of activeMacDecisions.values())pending.abort();
+    activeMacDecisions.clear();
     macTransfer?.controller.close();
     for (const stream of streams) stream.end();
     streams.clear();
