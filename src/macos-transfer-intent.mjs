@@ -53,7 +53,14 @@ function sha256(bytes) {
  * Trusted host or worker creates a non-authorizing preview from exact bytes.
  * No approval decision or OS file path may be inserted into the record.
  */
-export function createMacTransferIntent({operation,noteName,bytes,now=Date.now()}={}) {
+export function createMacTransferIntent(fields={}) {
+  // Even the *trusted* issuing API rejects unwanted path, bookmark and
+  // approval fields; ignoring them would obscure a caller's unsafe intent.
+  const hasNow=Object.prototype.hasOwnProperty.call(fields??{},'now');
+  exactRecord(fields,(hasNow?
+    ['bytes','noteName','now','operation']:
+    ['bytes','noteName','operation']).sort());
+  const {operation,noteName,bytes,now=Date.now()}=fields;
   acceptableClock(now);
   const snapshot=acceptableBytes(bytes);
   const intent={

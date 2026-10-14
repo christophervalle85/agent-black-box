@@ -58,6 +58,15 @@ test('byte binding rejects mutation, wrong length, malicious strings and oversiz
   assert.throws(()=>make({bytes:Buffer.alloc(MAC_TRANSFER_MAX_BYTES+1)}));
   assert.throws(()=>make({bytes:Buffer.alloc(0)}));
   assert.throws(()=>make({bytes:Buffer.from('hi'),now:-1}));
+  for(const extra of [
+    {sourcePath:'/Users/example/private.txt'},
+    {destinationPath:'/tmp/out.txt'},
+    {approved:true},{securityScopedBookmark:'untrusted'},
+    {bearerToken:'untrusted'}
+  ])assert.throws(()=>createMacTransferIntent({
+    operation:'import',noteName:'bbx-test-import.txt',bytes:payload(),
+    now:NOW,...extra
+  }),/schema mismatch/);
 });
 test('review snapshot equality is not a bearer approval and changes invalidate a request',()=>{
   const intent=make();
