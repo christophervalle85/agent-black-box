@@ -41,7 +41,8 @@
     "mcp:mac-xpc-peer-negative": "node examples/mcp-macos-xpc-peer-negative.mjs",
     "mcp:mac-xpc-notes-isolation": "node examples/mcp-macos-xpc-notes-isolation.mjs",
     "mcp:mac-xpc-inbound-peer-negative": "node examples/mcp-macos-xpc-inbound-peer-negative.mjs",
-    "mcp:mac-operator-auth": "node examples/mcp-macos-operator-auth.mjs"
+    "mcp:mac-operator-auth": "node examples/mcp-macos-operator-auth.mjs",
+    "mcp:mac-transfer-touchid": "node examples/mcp-macos-transfer-touchid.mjs"
   },
   "license": "MIT"
 }

@@ -468,3 +468,16 @@ These require enrolled and available Touch ID on the test Mac. In `touchid-appro
 If `touchid-probe` is unavailable on hardware without Touch ID or enrollment, stop: do not weaken the test or interpret an unavailable biometric policy as a successful cancellation. The prior generic `approve` evidence remains accepted; generic `cancel` is unresolved. No native proof is wired into the Phase 5 approval controller, and no file access, MCP transfer or macOS required-mode behavior is enabled.
 
 Apple references: [deviceOwnerAuthentication](https://developer.apple.com/documentation/localauthentication/lapolicy/deviceownerauthentication), [deviceOwnerAuthenticationWithBiometrics](https://developer.apple.com/documentation/localauthentication/lapolicy/deviceownerauthenticationwithbiometrics/), [LAErrorUserCancel](https://developer.apple.com/documentation/localauthentication/laerror/laerrorusercancel).
+
+### Phase 5: review-bound real Touch ID acceptance harness (on-device pending)
+
+The opt-in synthetic review demonstration now contains a dedicated macOS Touch ID binary and strict Node receipt validator. A disposable ad-hoc signed native helper evaluates LAPolicyDeviceOwnerAuthenticationWithBiometrics with a fresh LAContext, no fallback to Apple Watch or password. The trusted Node launcher creates an exact, expiring 1–2000-byte import review, logs a MAC_TRANSFER_REVIEW event into a temporary HMAC-authenticated audit store, and calls the helper with the immutable review ID, operation, synthetic note name, byte count, full SHA-256 digest and unique intent nonce. A successful native callback prints a fixed marker echoing review ID, nonce and digest; the Node verifier accepts *only* that exact output, status 0 and no errors, after rechecking expiry. An explicit LAErrorUserCancel callback returns distinct status 83 and a matching review-bound cancellation marker. Timeouts, crashes, altered outputs, other errors and cancelled requests are not accepted. No executable files are read or written besides a disposable compiled fixture and isolated temporary HMAC test artifacts.
+
+The positive fixture's authenticated outcome may then drive exactly one in-memory controller.approve decision and one exact-byte consume. Its HMAC audit must contain a consumed synthetic review. The negative fixture accepts ONLY explicit OS user cancellation, calls controller.deny and confirms the review cannot be consumed. The test never opens a real document, contacts MCP, launches XPC, nor enables a production permission. No HTTP endpoint or operator-verifier configuration was changed.
+
+Run both modes individually on a Mac with enrolled Touch ID:
+
+    MCP_SANDBOX=off npm run mcp:mac-transfer-touchid -- approve
+    MCP_SANDBOX=off npm run mcp:mac-transfer-touchid -- cancel
+
+Complete the OS fingerprint prompt in the first mode. For the negative mode, click Cancel WITHOUT touching the sensor. **Do not mark this new integration gate accepted until both real Mac runs pass.** It is strictly synthetic. The OS's biometric success does not prove the specific named person's identity or that the full request summary was visibly understood; Apple may abbreviate the localized reason. A full trusted native review UI, user consent, real file picker, production code-signing trust, OS-denial and MCP required-mode acceptance remain mandatory before release.
