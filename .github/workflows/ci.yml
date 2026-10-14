@@ -33,6 +33,7 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-inbound-peer-negative.mjs
       - run: node --check examples/mcp-macos-operator-auth.mjs
       - run: node --check examples/mcp-macos-transfer-touchid.mjs
+      - run: node --check examples/mcp-macos-native-picker.mjs
       - run: node --check src/macos-native-transfer-verifier.mjs
       - run: node --check src/macos-signer-trust.mjs
       - run: node --check src/macos-transfer-intent.mjs

@@ -481,3 +481,24 @@ Run both modes individually on a Mac with enrolled Touch ID:
     MCP_SANDBOX=off npm run mcp:mac-transfer-touchid -- cancel
 
 Complete the OS fingerprint prompt in the first mode. For the negative mode, click Cancel WITHOUT touching the sensor. **Do not mark this new integration gate accepted until both real Mac runs pass.** It is strictly synthetic. The OS's biometric success does not prove the specific named person's identity or that the full request summary was visibly understood; Apple may abbreviate the localized reason. A full trusted native review UI, user consent, real file picker, production code-signing trust, OS-denial and MCP required-mode acceptance remain mandatory before release.
+
+### October 14, 2026 — real Mac review-bound Touch ID and owner-cancel ACCEPTED
+
+I executed these acceptance commands on a real Mac with MCP_SANDBOX=off and recorded these exact outcomes:
+
+- mcp:mac-transfer-touchid -- approve: the ad-hoc helper compiled and verified, an immutable synthetic transfer-intent review was HMAC-audited, an actual Touch ID prompt succeeded, the matching review ID/nonce/digest was validated, and the reviewed synthetic grant was consumed once with HMAC consistency.
+- mcp:mac-transfer-touchid -- cancel: the native Touch ID prompt returned explicit user cancellation; the audited review was denied, could not be consumed, and HMAC consistency was verified.
+- mcp:mac-operator-auth -- cancel: after correctly clicking Cancel rather than authenticating, the original general device-owner-policy test returned explicit LAErrorUserCancel evidence and passed.
+
+The earlier unexpected general-policy authentication success was due to a positive authentication during a test expecting user cancellation. That earlier failed run remains part of the historical evidence, while the subsequent deliberate-cancellation run is accepted. Both the biometric-only and general owner-cancel acceptance tests have now produced successful negative evidence. This is real macOS acceptance, not merely Linux CI; no user files, native document picker, or production MCP operations were involved. Ad-hoc binary signing does not imply Developer ID positive authentication, and a synthetic review echo does not itself authenticate a native application's UI or human intent.
+
+### Phase 5 next gate — synthetic macOS Open Panel file selection (unaccepted until Mac runs)
+
+I added a separate NSOpenPanel fixture harness as an OS file-selection test, based on Apple's AppKit Open Panel interface. The temporary helper is ad-hoc signed and may choose exactly one file. The Node test harness creates a private temporary bbx-test-panel.txt synthetic fixture and compiles a disposable native AppKit application. The native panel starts in that temporary directory. If the operator selects another file or directory, the test fails. If selected, the native helper checks the chosen path is exactly the generated synthetic fixture, rejects symlinks and non-regular files, and emits only a fixed success marker; it does NOT read or return any file content or path. A native Cancel outcome is separately accepted only in cancellation mode.
+
+On the development Mac, after pulling the branch, run the commands individually:
+
+    MCP_SANDBOX=off npm run mcp:mac-native-picker -- select
+    MCP_SANDBOX=off npm run mcp:mac-native-picker -- cancel
+
+For select, explicitly choose ONLY the generated bbx-test-panel.txt and click Select Test File. For cancel, click Cancel WITHOUT selecting a file. The tested panel may let the operator browse outside the temporary fixture folder, but any different selection is rejected without opening/reading it; do not select personal documents. The temporary fixtures are deleted on exit. A successful picker test does not grant the MCP agent or native worker any capability to access user files, and the production signed, sandboxed document picker/import/export design is still pending. Mac MCP_SANDBOX=required must remain fail-closed.

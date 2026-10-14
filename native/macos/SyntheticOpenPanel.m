@@ -1,0 +1,70 @@
+/*
+ * v0.8 native Open Panel acceptance: a throwaway, synthetic fixture ONLY.
+ *
+ * This diagnostic NEVER reads the selected file or returns its path/contents.
+ * No MCP or controller integration; no native worker transfer permission.
+ * The sole permitted target is the harness-generated regular test file.
+ */
+#import <AppKit/AppKit.h>
+#import <Foundation/Foundation.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+
+static int result(const char *marker,int status){
+    puts(marker);
+    fflush(stdout);
+    return status;
+}
+static BOOL safeFixture(const char *path){
+    if(!path || path[0]!='/' || strlen(path)>4096)return NO;
+    struct stat details;
+    if(lstat(path,&details)!=0 || !S_ISREG(details.st_mode) ||
+       details.st_nlink!=1 || details.st_uid!=getuid() ||
+       details.st_size!=28)
+        return NO;
+    return YES;
+}
+int main(int argc,const char *argv[]){
+    @autoreleasepool{
+        if(argc!=3 ||
+           (strcmp(argv[1],"select")!=0 && strcmp(argv[1],"cancel")!=0) ||
+           !safeFixture(argv[2]))
+            return result("BBX_MAC_PICKER_INVALID_FIXTURE",90);
+        NSString *fixture=[NSString stringWithUTF8String:argv[2]];
+        if(![fixture.lastPathComponent isEqualToString:@"bbx-test-panel.txt"])
+            return result("BBX_MAC_PICKER_INVALID_FIXTURE",90);
+        NSString *directory=fixture.stringByDeletingLastPathComponent;
+        [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        NSOpenPanel *panel=[NSOpenPanel openPanel];
+        panel.title=@"Agent Black Box — synthetic file-selection test";
+        panel.message=@"Select ONLY bbx-test-panel.txt (or Cancel). No document will be read.";
+        panel.prompt=@"Select Test File";
+        panel.canChooseFiles=YES;
+        panel.canChooseDirectories=NO;
+        panel.allowsMultipleSelection=NO;
+        panel.resolvesAliases=NO;
+        panel.directoryURL=[NSURL fileURLWithPath:directory isDirectory:YES];
+        [NSApp activateIgnoringOtherApps:YES];
+        NSModalResponse chosen=[panel runModal];
+        if(chosen==NSModalResponseCancel)
+            return strcmp(argv[1],"cancel")==0?
+                result("BBX_MAC_PICKER_USER_CANCELLED",83):
+                result("BBX_MAC_PICKER_UNEXPECTED_CANCEL",85);
+        if(chosen!=NSModalResponseOK)
+            return result("BBX_MAC_PICKER_UNKNOWN_PANEL_RESULT",87);
+        if(panel.URLs.count!=1 || !panel.URLs.firstObject.isFileURL)
+            return result("BBX_MAC_PICKER_INVALID_SELECTION",87);
+        NSString *selected=panel.URLs.firstObject.path;
+        // No arbitrary file picker navigation can authorize a selection:
+        // the sole valid OS result is the previously staged test fixture.
+        if(strcmp(selected.fileSystemRepresentation,fixture.fileSystemRepresentation)!=0 ||
+           !safeFixture(argv[2]))
+            return result("BBX_MAC_PICKER_OUTSIDE_FIXTURE",87);
+        if(strcmp(argv[1],"cancel")==0)
+            return result("BBX_MAC_PICKER_UNEXPECTED_SELECTION",86);
+        return result("BBX_MAC_PICKER_EXACT_FIXTURE_SELECTED",0);
+    }
+}
