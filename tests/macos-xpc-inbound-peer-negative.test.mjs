@@ -35,6 +35,9 @@ test('only test worker builds install the OS incoming code-signing requirement b
   assert.match(worker,/"dev\.agentblackbox\.xpc-inbound-restricted\.host"/);
   assert.match(worker,/peerGate=bbx_install_same_team_peer_requirement/);
   assert.match(worker,/if\(peerGate!=0/);
+  assert.match(worker,/xpc_transaction_begin\(\)/);
+  assert.match(worker,/xpc_transaction_end\(\)/);
+  assert.match(worker,/6\*NSEC_PER_SEC/);
   assert.match(worker,/bbx-test-inbound-armed\.txt/);
   assert.match(worker,/bbx-test-inbound-delivered\.txt/);
   assert.ok(worker.indexOf('peerGate=bbx_install_same_team_peer_requirement')<
@@ -52,6 +55,9 @@ test('only test worker builds install the OS incoming code-signing requirement b
   assert.match(script,/inspectMinimalWorkerEntitlements/);
   assert.match(script,/validateMacWorkspaceBinding/);
   assert.match(script,/liveWorker\(armedPid\)/);
+  assert.match(script,/function workerProcess\(pid\)/);
+  assert.match(script,/BlackBoxAuthorityWorker/);
+  assert.match(script,/Worker not alive after incoming signing requirement setup/);
   assert.match(script,/MCP_SANDBOX!=='off'/);
   assert.doesNotMatch(ordinary,/BBX_TEST_INBOUND_PEER_REQUIREMENT/);
 });

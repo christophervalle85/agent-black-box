@@ -275,8 +275,18 @@ static void accept_peer(xpc_connection_t peer) {
      */
     int peerGate=bbx_install_same_team_peer_requirement(
         peer,"dev.agentblackbox.xpc-inbound-restricted.host");
-    if(peerGate!=0 ||
-       !bbx_inbound_peer_marker("bbx-test-inbound-armed.txt")){
+    if(peerGate!=0){
+        xpc_connection_cancel(peer);
+        return;
+    }
+    /* TEST ONLY: hold the worker active while the native harness checks
+     * peer rejection. This does not change authorization or release builds. */
+    xpc_transaction_begin();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,6*NSEC_PER_SEC),
+        dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{
+            xpc_transaction_end();
+        });
+    if(!bbx_inbound_peer_marker("bbx-test-inbound-armed.txt")){
         xpc_connection_cancel(peer);
         return;
     }

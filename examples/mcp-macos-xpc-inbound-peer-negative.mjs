@@ -57,14 +57,21 @@ function readNativeRoot(host){
   });
   return identity.content;
 }
-function liveWorker(pid) {
-  if(!Number.isSafeInteger(pid)||pid<=0)return false;
-  const r=spawnSync('/bin/ps',['-o','stat=','-p',String(pid)],{
-    encoding:'utf8',timeout:1500,maxBuffer:1000
+function workerProcess(pid) {
+  if(!Number.isSafeInteger(pid)||pid<=0)
+    return {alive:false,state:'invalid-pid',command:''};
+  const r=spawnSync('/bin/ps',['-o','stat=','-o','comm=','-p',String(pid)],{
+    encoding:'utf8',timeout:1500,maxBuffer:1200
   });
-  const state=r.stdout?.trim()??'';
-  return r.status===0 && state!=='' && !state.startsWith('Z');
+  const line=r.stdout?.trim()??'';
+  const match=/^(\S+)\s+(.+)$/.exec(line);
+  const command=match?.[2]??'';
+  const state=match?.[1]??'not-present';
+  const expected=command.split('/').at(-1)==='BlackBoxAuthorityWorker';
+  return {alive:r.status===0 && expected && !state.startsWith('Z') &&
+    !state.startsWith('X'),state,command};
 }
+function liveWorker(pid){return workerProcess(pid).alive;}
 export function assessInboundPeerRejection({armedPid,workerAlive,deliverySeen,
   workerMarkerFresh,hostAttempted,hostStdout='',hostStderr='',
   hostExited=false,hostExitCode=null,hostExitSignal=null,
@@ -231,9 +238,19 @@ async function main(){
         restrictedContainerExists:existsSync(restrictedRoot)
       }));
     }
-    if(!liveWorker(armedPid))
-      throw Error('Worker died after installing its incoming signing requirement.');
-    console.log('PASS: Restricted native worker installed peer identity gate and remained alive.');
+    if(!liveWorker(armedPid)) {
+      const outcome=trial.observe();
+      throw Error('Worker not alive after incoming signing requirement setup; '+
+        JSON.stringify({
+          workerPid:armedPid,workerProcess:workerProcess(armedPid),
+          hostExited:outcome.exited,hostExitCode:outcome.code,
+          hostExitSignal:outcome.signal,
+          hostOutput:outcome.stdout.slice(0,100),
+          hostDiagnostics:outcome.stderr.slice(0,250),
+          deliveredMarker:existsSync(deliveredPath)
+        }));
+    }
+    console.log('PASS: Restricted native worker remains alive during bounded XPC diagnostic transaction.');
     await sleep(1100);
     const current=trial.observe();
     assessInboundPeerRejection({
