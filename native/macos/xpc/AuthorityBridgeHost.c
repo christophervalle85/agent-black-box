@@ -47,7 +47,12 @@ static void response(bool ok,const char *data,size_t n) {
     fflush(stdout);
 }
 int main(void){
-    xpc_connection_t connection=xpc_connection_create("dev.agentblackbox.xpc-authority.worker",
+#ifdef BBX_TEST_INBOUND_CLIENT
+    const char *serviceName="dev.agentblackbox.xpc-inbound.worker";
+#else
+    const char *serviceName="dev.agentblackbox.xpc-authority.worker";
+#endif
+    xpc_connection_t connection=xpc_connection_create(serviceName,
                                                        dispatch_get_global_queue(QOS_CLASS_DEFAULT,0));
     if(!connection)return 70;
 #ifdef BBX_TEST_PEER_REQUIREMENT

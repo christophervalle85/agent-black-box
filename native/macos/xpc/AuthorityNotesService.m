@@ -23,6 +23,12 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #endif
+#ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
+#include "PeerRequirementGate.h"
+#if defined(BBX_TEST_NOTES_ISOLATION)
+#error "Inbound peer requirement and OS-isolation diagnostics must be separate."
+#endif
+#endif
 #import <Foundation/Foundation.h>
 
 static bool allowed_name(const char *name) {
@@ -160,7 +166,38 @@ finish:
 }
 #endif
 
+
+#ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
+/*
+ * Test-only, content-free proof that the native *worker* installed Apple's
+ * same-team requirement and is running. Both markers live exclusively
+ * in this worker's existing sandbox-owned Documents scratch directory.
+ * No diagnostic method is added to the production worker.
+ */
+static bool bbx_inbound_peer_marker(const char *name) {
+    int dir=notes_fd();
+    if(dir<0)return false;
+    int fd=openat(dir,name,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+    if(fd<0){close(dir);return false;}
+    char data[48];
+    int count=snprintf(data,sizeof(data),"%ld\n",(long)getpid());
+    bool success=count>0 && count<(int)sizeof(data) &&
+                 write(fd,data,(size_t)count)==count && fsync(fd)==0;
+    if(close(fd)<0)success=false;
+    if(!success)unlinkat(dir,name,0);
+    close(dir);
+    return success;
+}
+#endif
+
 static void message(xpc_connection_t peer,xpc_object_t incoming) {
+#ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
+    /* If the OS ever delivers this unauthorized message, leave durable
+     * evidence and never execute a normal notes operation. */
+    (void)bbx_inbound_peer_marker("bbx-test-inbound-delivered.txt");
+    xpc_connection_cancel(peer);
+    return;
+#endif
 #ifdef BBX_TEST_NOTES_ISOLATION
     const char *method=xpc_dictionary_get_string(incoming,"method");
     if(method && strcmp(method,"probe")==0){
@@ -229,6 +266,21 @@ finish:
     xpc_release(response);
 }
 static void accept_peer(xpc_connection_t peer) {
+#ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
+    /*
+     * Install exactly one OS-enforced signature requirement on each
+     * incoming connection BEFORE resume; never fall back to UID/PID.
+     * The test host is ad-hoc signed and must NOT qualify as the worker's
+     * same-Team-ID peer. No ordinary release builds contain this fixture.
+     */
+    int peerGate=bbx_install_same_team_peer_requirement(
+        peer,"dev.agentblackbox.xpc-inbound.host");
+    if(peerGate!=0 ||
+       !bbx_inbound_peer_marker("bbx-test-inbound-armed.txt")){
+        xpc_connection_cancel(peer);
+        return;
+    }
+#endif
     xpc_connection_set_event_handler(peer,^(xpc_object_t event) {
         if(xpc_get_type(event)==XPC_TYPE_DICTIONARY)message(peer,event);
     });

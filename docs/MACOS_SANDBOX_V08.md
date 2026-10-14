@@ -336,3 +336,19 @@ My first on-Mac run of `MCP_SANDBOX=off npm run mcp:mac-xpc-notes-isolation` com
 
 The cause was a **harness response-shape mismatch**, not an observed OS isolation failure. `ProbeHost.c` rejected a native reply unless it was a dictionary with `valid=true`; upon success it emitted the existing probe JSON fields **without** `valid`. The new notes isolation JS diagnostic incorrectly required that validated field in the serialized JSON. I updated **only the disposable native probe host's `BBX_TEST_NOTES_ISOLATION` build** to include a verified `valid:true` prefix. The ordinary probe JSON stays byte-for-byte compatible. The strict JS native-acknowledgement check and OS-denial conditions are unchanged. The new run still requires actual on-device OS permission-denied and private Documents write evidence; do not call this gate accepted until that command passes.
 
+
+
+## Phase 4 — worker-side incoming XPC peer authentication (negative gate, Mac pending)
+
+The real Mac **host → worker** same-Team-ID requirement negative test and notes-worker OS filesystem/network denial tests passed on October 14, 2026. The new complementary diagnostic now tests the **worker's own incoming XPC connection** rather than trusting a host-only requirement. Apple documents that if an *initiating* process does not satisfy the signing requirement on an inbound connection, the worker's handler receives **no message** (it does not emit a rejection RPC). A generic timeout is therefore never sufficient evidence.
+
+My new \`MCP_SANDBOX=off npm run mcp:mac-xpc-inbound-peer-negative\` fixture:
+
+1. Builds a uniquely named synthetic App Sandbox XPC worker and ad-hoc host using the already-tested \`AuthorityNotesService.m\` and \`AuthorityBridgeHost.c\` sources, with a **working unrestricted baseline** verified against the private canonical Documents workspace.
+2. Rebuilds and signs only the throwaway worker with \`BBX_TEST_INBOUND_PEER_REQUIREMENT=1\`; it calls \`bbx_install_same_team_peer_requirement(peer, "dev.agentblackbox.xpc-inbound.host")\` **before** its incoming connection resumes. A failed API lookup or requirement installation **refuses the peer** and creates no success marker. No UID/PID trust fallback exists.
+3. On successful installation only, the worker writes a small PID marker in its private Documents scratch root. The harness independently checks the signature, minimal entitlements, fresh marker, and **live** worker PID. If Apple's requirement ever incorrectly delivers the unauthorized host request, the worker writes a separate *delivered* marker **without executing any note operation**.
+4. Requires an unreturned native \`ROOT\` request **while the worker is demonstrably alive**, with a present armed marker and **absent delivered marker**. The native host is then killed during test cleanup, and only the exact synthetic marker files are removed.
+
+Because the ad-hoc host cannot prove an Apple-issued Team ID, the expected result is **rejection**. The normal worker and prior cancellation/native-authority tests do not compile this instrumentation, and macOS \`MCP_SANDBOX=required\` remains fail-closed. This new negative test still needs real Mac execution and does **not** prove that a positively Developer ID-signed pair can mutually authenticate, which requires the separate signing identity and release gate.
+
+Official reference: [Apple xpc_connection_set_peer_team_identity_requirement](https://developer.apple.com/documentation/xpc/xpc_connection_set_peer_team_identity_requirement%28_%3A_%3A%29).
