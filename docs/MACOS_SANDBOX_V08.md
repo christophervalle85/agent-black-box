@@ -415,3 +415,108 @@ This intentionally verifies **data integrity and reviewed-metadata equality only
 I added `src/macos-transfer-review.mjs` with a **strictly separated trusted-host and trusted-controller interface** for synthetic import/export intents. A trusted host creates a pending review from the existing validated path-free digest manifest. The operator-only controller facet can approve or deny exactly once; absent approval, expiry, cancellation, replay, mismatched digest/name/operation/nonce, invalid payloads and shutdown all deny consumption. The host consumes before validating a candidate payload, so a failed attempt burns that grant and cannot be retried against a different payload. A bounded per-process nonce tombstone set prevents duplicate manifests and intentionally fails closed when capacity is exhausted. A restart loses **all** approvals, not merely the pending ones. Only metadata is stored; no transfer contents or bearer tokens are retained.
 
 **Important scope:** this is an **in-memory state-machine component, NOT an authenticated operator approval service**. The caller must enforce that only the already-authenticated local controller receives the `controller` facet; possession of that object alone is not strong identity proof. The existing `ApprovalQueue` / MCP approval endpoint still only handles `file.write`. This new module is not imported by the web server, MCP gateway or XPC worker, issues no transferable grant, audits no action and touches no host files. Next production steps: authenticated/controller-bound review integration, audited grant consumption, native file picker and safe import/export protocol. No macOS required-mode change.
+
+
+### Phase 5 local controller wiring — opt-in, synthetic only
+
+I connected the in-memory transfer review state machine to an HMAC-audited local controller, only if trusted application code explicitly passes experimentalMacTransferReviews: true to createBlackBoxServer. The normal CLI starts with the new functionality OFF. An in-process macTransferHost facade can open, consume or cancel synthetically reviewed metadata; no HTTP or MCP tool can create a review, access host files or perform an import/export.
+
+The optional read-only GET /api/mac/transfers/pending displays path-free metadata. POST /api/mac/transfers/:id/decision permits only same-origin, JSON, one-field approve/deny requests and checks audit integrity. HMAC audit records bind lifecycle events to the unique review ID while omitting payload bytes, native paths, credentials and bookmarks. A failed audit verification or append prevents staging; on failure of the completion audit for a decision the grant is cancelled. A successful consume means only that digest-bound one-time metadata was validated, not that a file transfer occurred. No authenticated native picker or XPC file transfer exists.
+
+SECURITY LIMITATION: same-origin HTTP Origin enforcement is a browser anti-CSRF boundary, NOT operator identity authentication. A local malicious process can forge Origin headers. Final production approval requires an independent trusted operator-authentication and native picker capability, plus authenticated host-worker signing. This adapter remains synthetic and opt-in, and macOS MCP_SANDBOX=required still fails closed.
+
+### Phase 5 decision gate hardening — operator verification required (opt-in only)
+
+I found that an experimental same-origin HTTP decision could previously mark synthetic transfers approved without independently verifying the person making the decision. That Origin check only defends against some browser CSRF scenarios: it is NOT proof of an operator's identity.
+
+The new opt-in experimentalMacTransferOperatorVerify callback is supplied by trusted **in-process** application code and receives only the immutable, path-free review intent, review ID and approve/deny decision. Without a verifier, POST decisions return 403 and no synthetic grant becomes approved. The normal server continues with all synthetic transfer functionality disabled. A verifier that rejects, errors, or fails to return exactly true cannot authorize anything. Verification runs before the existing HMAC-audited decision call, with a 15-second abort deadline, no double prompt for the same pending review, and a fresh review/expiry check after the callback finishes. Client disconnect, host cancellation, stale reviews and server shutdown cannot revive an unconsumed grant. Approval grants remain in-memory, single-use and digest-bound, and no OS document transfer or HTTP creation/consumption capability was added.
+
+**Not production authentication:** the callback is deliberately a narrow integration seam, not an actual Apple LocalAuthentication implementation. Injecting a test mock that returns true proves the control flow only. A future audited, natively authenticated, user-initiated operation must implement the real verifier plus a trusted macOS document picker and signed host/worker transport before any real file access. MCP_SANDBOX=required remains fail-closed.
+
+### Phase 5 macOS device-owner authentication — actual OS acceptance pending
+
+A new **standalone, opt-in, disposable** native acceptance harness tests Apple's LocalAuthentication framework directly on the developer's Mac. The helper source is `native/macos/LocalOperatorAuthentication.m`; `examples/mcp-macos-operator-auth.mjs` compiles it with Xcode's macOS SDK, signs the disposable executable ad-hoc, verifies the code signature, and then invokes a fixed-mode test that calls `LAContext canEvaluatePolicy` and `evaluatePolicy` with `LAPolicyDeviceOwnerAuthentication`. This OS policy may use Touch ID, a nearby Apple Watch or the Mac account password, depending on system configuration. This is **device-owner authentication**, not proof of a particular named operator's identity, and Apple's dialog remains user-controlled. The helper uses a fresh context with biometric reuse duration 0 and a bounded 75-second native wait.
+
+All commands require `MCP_SANDBOX=off` because they are ad-hoc-signed **experiments**, not production sandboxed operations. A real interactive macOS login session is necessary. Commands must be run individually:
+
+```sh
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- probe
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- approve
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- cancel
+```
+
+`probe` must report that the OS device-owner policy is available, without prompting. For `approve`, complete the native OS prompt; an exact OS success is required. For `cancel`, actively click Cancel in the OS prompt; **only** Apple's `LAErrorUserCancel` result counts as a negative pass. Incorrect passwords, unavailable policies, crashes, missing prompts, helper timeouts and unexpectedly successful authentication are **not** accepted as cancellation evidence. The fixture prints only fixed markers and does not accept user paths, process tool arguments, arbitrary prompt reasons, content or approvals. Its temporary executable is removed in cleanup.
+
+**This is NOT yet integrated with an actual transfer approval.** No real OS-authentication verdict is currently bound to the digest/nonce-bound Phase 5 review, no local controller invokes this helper, no signed approval token exists, no file picker or user document is accessed, and `MCP_SANDBOX=required` remains fail-closed. A successful prompt in this fixture will justify implementing a trustworthy native review-bound verifier, not enabling transfers. CLI ad-hoc signing is not Developer ID production signing.
+
+The pure Node verdict tests run in CI on Linux, but **only a human executing the three commands on macOS** can establish OS user-presence acceptance. Record each result separately and mark the native gate accepted only after all three complete successfully.
+
+### October 14, 2026 — owner-auth cancellation is NOT accepted; isolate biometric-only policy
+
+On my Mac, the disposable `mcp:mac-operator-auth` fixture passed both `probe` and `approve` using `LAPolicyDeviceOwnerAuthentication`, but the requested `cancel` mode returned **status 85 / BBX_LOCAL_AUTH_UNEXPECTED_SUCCESS**. This is an OS authentication **success**, *not* a `LAErrorUserCancel` response, so the strict negative verifier correctly rejected it. This is **not** evidence that the local operator's explicit cancellation was ignored by the OS: the output cannot identify the mechanism or prove when/whether a dialog appeared. Apple documents that the generic device-owner policy on macOS can attempt Touch ID and Apple Watch authentication in parallel, with password fallback. A successful Watch (or other configured mechanism) can race a cancellation attempt. The existing `touchIDAuthenticationAllowableReuseDuration=0` disables Touch ID device-unlock reuse; it does not prove that other allowed authentication paths cannot succeed.
+
+I added three explicitly labeled **biometric-only** modes using the Apple `LAPolicyDeviceOwnerAuthenticationWithBiometrics` policy, without Watch/password fallback:
+
+```sh
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- touchid-probe
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- touchid-approve
+MCP_SANDBOX=off npm run mcp:mac-operator-auth -- touchid-cancel
+```
+
+These require enrolled and available Touch ID on the test Mac. In `touchid-approve`, authenticate with the enrolled finger. In `touchid-cancel`, **do not touch the sensor**; click the OS prompt's Cancel button. The negative test passes only if the callback supplies `LAErrorUserCancel` and the helper exits with **83** plus an exact, biometric-specific marker. Any unexpected successful authentication, unavailable policy, different error, invalid signature, timeout or absent GUI interaction remains **NOT ACCEPTED**. Biometrics-only tests do not retroactively pass the earlier generic owner-auth cancellation; results must be tracked separately and the production device-owner policy must be checked in its final configuration.
+
+If `touchid-probe` is unavailable on hardware without Touch ID or enrollment, stop: do not weaken the test or interpret an unavailable biometric policy as a successful cancellation. The prior generic `approve` evidence remains accepted; generic `cancel` is unresolved. No native proof is wired into the Phase 5 approval controller, and no file access, MCP transfer or macOS required-mode behavior is enabled.
+
+Apple references: [deviceOwnerAuthentication](https://developer.apple.com/documentation/localauthentication/lapolicy/deviceownerauthentication), [deviceOwnerAuthenticationWithBiometrics](https://developer.apple.com/documentation/localauthentication/lapolicy/deviceownerauthenticationwithbiometrics/), [LAErrorUserCancel](https://developer.apple.com/documentation/localauthentication/laerror/laerrorusercancel).
+
+### Phase 5: review-bound real Touch ID acceptance harness (on-device pending)
+
+The opt-in synthetic review demonstration now contains a dedicated macOS Touch ID binary and strict Node receipt validator. A disposable ad-hoc signed native helper evaluates LAPolicyDeviceOwnerAuthenticationWithBiometrics with a fresh LAContext, no fallback to Apple Watch or password. The trusted Node launcher creates an exact, expiring 1–2000-byte import review, logs a MAC_TRANSFER_REVIEW event into a temporary HMAC-authenticated audit store, and calls the helper with the immutable review ID, operation, synthetic note name, byte count, full SHA-256 digest and unique intent nonce. A successful native callback prints a fixed marker echoing review ID, nonce and digest; the Node verifier accepts *only* that exact output, status 0 and no errors, after rechecking expiry. An explicit LAErrorUserCancel callback returns distinct status 83 and a matching review-bound cancellation marker. Timeouts, crashes, altered outputs, other errors and cancelled requests are not accepted. No executable files are read or written besides a disposable compiled fixture and isolated temporary HMAC test artifacts.
+
+The positive fixture's authenticated outcome may then drive exactly one in-memory controller.approve decision and one exact-byte consume. Its HMAC audit must contain a consumed synthetic review. The negative fixture accepts ONLY explicit OS user cancellation, calls controller.deny and confirms the review cannot be consumed. The test never opens a real document, contacts MCP, launches XPC, nor enables a production permission. No HTTP endpoint or operator-verifier configuration was changed.
+
+Run both modes individually on a Mac with enrolled Touch ID:
+
+    MCP_SANDBOX=off npm run mcp:mac-transfer-touchid -- approve
+    MCP_SANDBOX=off npm run mcp:mac-transfer-touchid -- cancel
+
+Complete the OS fingerprint prompt in the first mode. For the negative mode, click Cancel WITHOUT touching the sensor. **Do not mark this new integration gate accepted until both real Mac runs pass.** It is strictly synthetic. The OS's biometric success does not prove the specific named person's identity or that the full request summary was visibly understood; Apple may abbreviate the localized reason. A full trusted native review UI, user consent, real file picker, production code-signing trust, OS-denial and MCP required-mode acceptance remain mandatory before release.
+
+### October 14, 2026 — real Mac review-bound Touch ID and owner-cancel ACCEPTED
+
+I executed these acceptance commands on a real Mac with MCP_SANDBOX=off and recorded these exact outcomes:
+
+- mcp:mac-transfer-touchid -- approve: the ad-hoc helper compiled and verified, an immutable synthetic transfer-intent review was HMAC-audited, an actual Touch ID prompt succeeded, the matching review ID/nonce/digest was validated, and the reviewed synthetic grant was consumed once with HMAC consistency.
+- mcp:mac-transfer-touchid -- cancel: the native Touch ID prompt returned explicit user cancellation; the audited review was denied, could not be consumed, and HMAC consistency was verified.
+- mcp:mac-operator-auth -- cancel: after correctly clicking Cancel rather than authenticating, the original general device-owner-policy test returned explicit LAErrorUserCancel evidence and passed.
+
+The earlier unexpected general-policy authentication success was due to a positive authentication during a test expecting user cancellation. That earlier failed run remains part of the historical evidence, while the subsequent deliberate-cancellation run is accepted. Both the biometric-only and general owner-cancel acceptance tests have now produced successful negative evidence. This is real macOS acceptance, not merely Linux CI; no user files, native document picker, or production MCP operations were involved. Ad-hoc binary signing does not imply Developer ID positive authentication, and a synthetic review echo does not itself authenticate a native application's UI or human intent.
+
+### Phase 5 next gate — synthetic macOS Open Panel file selection (unaccepted until Mac runs)
+
+I added a separate NSOpenPanel fixture harness as an OS file-selection test, based on Apple's AppKit Open Panel interface. The temporary helper is ad-hoc signed and may choose exactly one file. The Node test harness creates a private temporary bbx-test-panel.txt synthetic fixture and compiles a disposable native AppKit application. The native panel starts in that temporary directory. If the operator selects another file or directory, the test fails. If selected, the native helper checks the chosen path is exactly the generated synthetic fixture, rejects symlinks and non-regular files, and emits only a fixed success marker; it does NOT read or return any file content or path. A native Cancel outcome is separately accepted only in cancellation mode.
+
+On the development Mac, after pulling the branch, run the commands individually:
+
+    MCP_SANDBOX=off npm run mcp:mac-native-picker -- select
+    MCP_SANDBOX=off npm run mcp:mac-native-picker -- cancel
+
+For select, explicitly choose ONLY the generated bbx-test-panel.txt and click Select Test File. For cancel, click Cancel WITHOUT selecting a file. The tested panel may let the operator browse outside the temporary fixture folder, but any different selection is rejected without opening/reading it; do not select personal documents. The temporary fixtures are deleted on exit. A successful picker test does not grant the MCP agent or native worker any capability to access user files, and the production signed, sandboxed document picker/import/export design is still pending. Mac MCP_SANDBOX=required must remain fail-closed.
+
+### October 17, 2026 — native picker cancellation accepted; selection rejected (investigating path aliases)
+
+An actual macOS NSOpenPanel run with MCP_SANDBOX=off returned an explicit user cancellation and the negative test **PASSED**. A separate selection trial returned exit 87 with BBX_MAC_PICKER_OUTSIDE_FIXTURE and therefore **FAILED CLOSED**. The marker does not identify the selected path or prove the precise root cause. macOS commonly presents temporary directories as /var/folders/... from Node's os.tmpdir(), while AppKit may resolve the same underlying location under /private/var/folders/...; string-equality checks can reject a legitimate selection of the identical file. The failed result is preserved pending independent Mac retest.
+
+To distinguish a lexical path-alias mismatch from a different selected file without relaxing acceptance, the native diagnostic now uses lstat() to require BOTH selected path and original path to be the same user-owned, regular, non-symlink test fixture with the required byte size and exactly one link, and checks matching st_dev and st_ino. It also checks the exact bbx-test-panel.txt basename. This accepts only the *same inode* even if the parent path string is normalized differently, while rejecting another file, a leaf symlink, a hard-linked file, and unexpected panel actions. No file is opened, read, or returned. There is still a potential future TOCTOU concern if an actual import were ever added: this is test-only path identity, NOT durable permission or safe production file handle. Static tests and a parent-path-alias regression case accompany the change.
+
+Acceptance remains pending until the actual Mac `MCP_SANDBOX=off npm run mcp:mac-native-picker -- select` succeeds after updating the branch. If it still fails, investigate the selected test fixture and AppKit behavior without weakening file identity checks, allowing arbitrary paths, logging personal paths or bypassing test denial. No production document access or MCP_SANDBOX=required mode was changed.
+
+### October 17, 2026 — native picker positive acceptance passed on real macOS
+
+The user reran `MCP_SANDBOX=off npm run mcp:mac-native-picker -- select` after commit b899044 (the inode-based fixture identity fix). The actual disposable, ad-hoc-signed macOS AppKit helper compiled, verified its signature, and returned **BBX_MAC_PICKER_EXACT_FIXTURE_SELECTED** for the generated bbx-test-panel.txt; the Node acceptance harness reported PASS. The earlier same-file `BBX_MAC_PICKER_OUTSIDE_FIXTURE` failure remains in the record as the pre-fix result. The real Mac cancellation path had already passed. This establishes *synthetic native picker selection and cancellation*, not a production capability to import external files.
+
+### Next native negative acceptance: deliberate wrong synthetic file
+
+I added `MCP_SANDBOX=off npm run mcp:mac-native-picker -- reject-other` to deliberately test denying the wrong file. The harness creates two owner-owned regular files in the same private temporary folder, `bbx-test-panel.txt` (allowed) and `bbx-test-other.txt` (intentionally disallowed). The human must **select bbx-test-other.txt** in the AppKit Open Panel, not Cancel and not the allowed file. The native helper checks that both pre-staged fixtures are individually safe, distinct inodes, and expected filenames in the same generated folder. It accepts as negative evidence ONLY an AppKit selection matching the alternate fixture's inode and basename. It then emits fixed `BBX_MAC_PICKER_OTHER_FIXTURE_REJECTED` with exit 87; the Node harness marks this explicit wrong-file rejection as a PASS for **reject-other only**. Selecting a different file, selecting the allowed fixture, cancelling, unavailable UI, unexpected errors, or any other output CANNOT pass the wrong-file negative test. No contents or selected path are opened, read, or returned. The helper is ad-hoc-signed and both fixtures are deleted after the test.
+
+**Gate status: ACCEPTED on real macOS, October 17, 2026.** After commit 49eb286, the user ran `MCP_SANDBOX=off npm run mcp:mac-native-picker -- reject-other` and explicitly selected `bbx-test-other.txt`. The ad-hoc-signed AppKit fixture built and verified, and the native result was recognized as an independently verified alternate-file rejection. The CLI reported `PASS: Native file panel rejected the independently verified alternate synthetic fixture.` and `PASS: The fixture never returned file paths or contents to the caller.` This completes the *synthetic* picker acceptance matrix: exact fixture selection PASS (after the inode fix), explicit cancellation PASS, and wrong-file rejection PASS. The earlier pre-fix selection failure remains documented. The diagnostic is not a production authorization boundary: it does not exercise XPC transport, durable file handles, atomic import/export, full filesystem race prevention or signed host/worker trust. No actual file import/export was implemented, and macOS `MCP_SANDBOX=required` remains fail-closed.

@@ -56,6 +56,14 @@ export function createMacTransferReviewPair({clock=Date.now,maxRequests=64}={}) 
     return Object.freeze([...pending].filter(([,r])=>r.state==='pending')
       .map(([id,record])=>Object.freeze({reviewId:id,intent:record.intent})));
   }
+  // Trusted controller only. Includes approved-but-unconsumed records so
+  // the audit adapter can tie a later consume/cancel to the original grant.
+  function lookup(id) {
+    if(closed||!reviewId(id))return null;
+    cleanExpired(boundedClock(clock));
+    const record=pending.get(id);
+    return record?Object.freeze({reviewId:id,intent:record.intent}):null;
+  }
   function decide(id,decision) {
     if(closed||!reviewId(id) || (decision!=='approve'&&decision!=='deny'))
       return false;
@@ -96,6 +104,6 @@ export function createMacTransferReviewPair({clock=Date.now,maxRequests=64}={}) 
     // Trusted host/adapter keeps this facet OUTSIDE model-controlled code.
     host:Object.freeze({request,consume,cancel}),
     // Only the authenticated controller should ever receive this facet.
-    controller:Object.freeze({pending:pendingReviews,decide,close})
+    controller:Object.freeze({pending:pendingReviews,lookup,decide,close})
   });
 }

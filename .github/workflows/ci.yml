@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/v0.8-*']
   pull_request:
 jobs:
   test:
@@ -31,9 +31,14 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-peer-negative.mjs
       - run: node --check examples/mcp-macos-xpc-notes-isolation.mjs
       - run: node --check examples/mcp-macos-xpc-inbound-peer-negative.mjs
+      - run: node --check examples/mcp-macos-operator-auth.mjs
+      - run: node --check examples/mcp-macos-transfer-touchid.mjs
+      - run: node --check examples/mcp-macos-native-picker.mjs
+      - run: node --check src/macos-native-transfer-verifier.mjs
       - run: node --check src/macos-signer-trust.mjs
       - run: node --check src/macos-transfer-intent.mjs
       - run: node --check src/macos-transfer-review.mjs
+      - run: node --check src/macos-transfer-controller.mjs
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
