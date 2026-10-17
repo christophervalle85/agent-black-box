@@ -35,6 +35,7 @@ jobs:
       - run: node --check examples/mcp-macos-transfer-touchid.mjs
       - run: node --check examples/mcp-macos-native-picker.mjs
       - run: node --check examples/mcp-macos-selected-snapshot.mjs
+      - run: node --check examples/mcp-macos-xpc-transfer-receipt.mjs
       - run: node --check src/macos-native-transfer-verifier.mjs
       - run: node --check src/macos-signer-trust.mjs
       - run: node --check src/macos-transfer-intent.mjs
@@ -56,7 +57,9 @@ jobs:
           xcrun clang "${flags[@]}" -o "$out/SyntheticOpenPanel" native/macos/SyntheticOpenPanel.m -framework AppKit -framework Foundation
           xcrun clang "${flags[@]}" -o "$out/LocalOperatorAuthentication" native/macos/LocalOperatorAuthentication.m -framework Foundation -framework LocalAuthentication
           xcrun clang "${flags[@]}" -o "$out/TransferReviewAuthenticator" native/macos/TransferReviewAuthenticator.m -framework Foundation -framework LocalAuthentication
-          echo "PASS: All four native fixture executables compiled with Apple's SDK; no GUI tests were run."
+          xcrun clang "${flags[@]}" -o "$out/TransferReceiptHost" native/macos/xpc/TransferReceiptHost.c
+          xcrun clang "${flags[@]}" -o "$out/TransferReceiptWorker" native/macos/xpc/TransferReceiptService.m
+          echo "PASS: Six native fixture executables compiled with Apple's SDK; no GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

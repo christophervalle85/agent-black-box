@@ -44,7 +44,8 @@
     "mcp:mac-operator-auth": "node examples/mcp-macos-operator-auth.mjs",
     "mcp:mac-transfer-touchid": "node examples/mcp-macos-transfer-touchid.mjs",
     "mcp:mac-native-picker": "node examples/mcp-macos-native-picker.mjs",
-    "mcp:mac-selected-snapshot": "node examples/mcp-macos-selected-snapshot.mjs"
+    "mcp:mac-selected-snapshot": "node examples/mcp-macos-selected-snapshot.mjs",
+    "mcp:mac-xpc-transfer-receipt": "node examples/mcp-macos-xpc-transfer-receipt.mjs"
   },
   "license": "MIT"
 }
