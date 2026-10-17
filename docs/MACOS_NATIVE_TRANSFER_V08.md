@@ -172,3 +172,17 @@ Run on the development Mac, from the updated `feature/v0.8-native-transfers` bra
 Approve ONLY the expected macOS Keychain requests for `codesign` to access the **locally installed Apple Development private key**; select Allow for each expected signing request, not Always Allow. A Keychain prompt is about allowing local executable signing, not a user decision to reject XPC messages. No Touch ID approval, personal documents or picker selection occurs. The test may invoke signing for the worker, wrong host and container app, so there may be multiple prompts. Never send passwords, the private key or certificate hashes in chat.
 
 **Acceptance PENDING:** Native compilation in CI validates API compatibility; a real-Mac run must demonstrate correct signing, the legitimate receipt, the typed error from the wrong host and unchanged message delivery count on the same live worker. A timeout, worker crash, an unsigned helper, a Team ID mismatch, a changed worker PID, malformed counters, unexpected handler delivery or a generic successful response must NOT be called passing. The worker diagnostic counter exists **only in a test-macro variant**, makes no persistent files, and is not an HMAC audit trail. This test does not authenticate a Touch ID-approved transaction or enable filesystem writes. `MCP_SANDBOX=required` must remain fail-closed.
+
+## October 17, 2026 — real Mac incoming signed-host rejection ACCEPTED
+
+The operator ran `MCP_SANDBOX=off npm run mcp:mac-xpc-inbound-signed` on the real Mac. The native harness reported all of the following:
+
+- **PASS**: legitimate host, wrong-identifier helper, and sandboxed worker were Apple Development-signed with the **same Team ID**.
+- **PASS**: the worker accepted the legitimate host's fixed synthetic receipt and rejected the differently signed incoming host **before handler delivery**.
+- **PASS**: the same live worker PID remained active, and its handler-delivery counter incremented only for authorized control probes. No unauthorized message reached the worker's handler.
+
+**Acceptance status: PASSED** for the isolated on-device incoming signing-identifier test. Taken together with the earlier signed-valid and wrong-worker results, synthetic outbound and inbound same-Team-ID/exact-identifier acceptance and negatives have been exercised on a real development Mac. These tests do not establish Developer ID production signing, actual file transfers, durable replay protection, or Touch ID-bound authorization.
+
+The macOS Keychain asked for the login password/authorization three times because the harness runs `codesign --sign` three times: once for the sandboxed XPC worker, once for the wrong-identifier helper executable, and once for the containing legitimate host app. Each invocation can independently request access to the Apple Development signing private key. This permission is for **codesign**, not a decision to authorize the unauthorized host. For expected prompts, prefer **Allow** rather than **Always Allow**; never share a password or private key. A future harness could sign fewer times by reusing already-signed fixtures, but it must not weaken the separate exact code identities being tested.
+
+**Next release blocker:** connect the real native Touch ID outcome and audited, single-use immutable review to exact synthetic bytes on a signed trusted host-to-worker connection; implement expiry/cancellation/mismatch/replay/crash negative tests and verify their on-device outcomes. Production `MCP_SANDBOX=required` remains fail-closed and MCP document access remains disabled.
