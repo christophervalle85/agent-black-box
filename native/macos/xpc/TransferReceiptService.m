@@ -43,7 +43,7 @@ static bool testName(const char *s){
 static bool exactKeys(xpc_object_t request){
     __block unsigned count=0;
     __block bool valid=true;
-    xpc_dictionary_apply(request,^(const char *key,xpc_object_t value){
+    xpc_dictionary_apply(request,^bool(const char *key,xpc_object_t value){
         (void)value;
         if(strcmp(key,"method")!=0 && strcmp(key,"name")!=0 &&
            strcmp(key,"nonce")!=0 && strcmp(key,"sha256")!=0 &&
