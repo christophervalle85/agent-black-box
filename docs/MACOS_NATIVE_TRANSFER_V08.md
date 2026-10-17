@@ -32,3 +32,9 @@ Reference: https://developer.apple.com/documentation/Security/accessing-files-fr
 The first real Mac `select` and `altered` snapshot attempts **both failed during compilation**, before opening NSOpenPanel. Apple's Clang reported an undeclared `explicit_bzero` in SelectedFileSnapshot.m. The issue is the missing `#include <strings.h>` (the macOS declaration header), not an observed failure of file-descriptor validation. We fixed the native include without weakening the explicit memory zeroing. The executable's local build now treats implicit function declarations as errors.
 
 To prevent this Linux-only-CI blind spot, CI has a **macos-15 native compile** job for the snapshot fixture and three previously accepted native helpers using the real Apple SDK and `-Werror=implicit-function-declaration`. A successful macOS compile job confirms only native compilation, not OS prompt behavior, sandbox authorization, or successful file reads. These two Phase 6 GUI acceptance tests remain **PENDING** until rerun on the user's Mac after synchronizing the fixed branch.
+
+## October 17, 2026 — follow-up CI result and SDK-compatible secure zeroing
+
+The new **real macOS 15 native CI compile job failed** even after adding strings.h: `explicit_bzero` is not declared in the Xcode SDK tested. We therefore replaced `explicit_bzero` with Apple's documented `memset_s`, enabled by defining `__STDC_WANT_LIB_EXT1__ 1` before system headers. The secure_wipe helper treats any unexpected wipe error as fatal instead of continuing. Source contract tests cover the declaration and secure-wipe use.
+
+The macOS compile job remains required and will be checked on this follow-up commit. Do not mark either native GUI acceptance as passed until the user runs the select and altered fixture workflows on the actual Mac after CI succeeds.

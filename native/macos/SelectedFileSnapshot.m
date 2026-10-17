@@ -10,6 +10,7 @@
  * require matching device/inode and strict regular-file limits, then hash
  * exactly the bytes read from the opened selected FD (not a re-opened path).
  */
+#define __STDC_WANT_LIB_EXT1__ 1
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -20,11 +21,16 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h> // macOS declares explicit_bzero here.
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #define BBX_SNAPSHOT_MAX 2000
+/* Apple's documented memset_s prevents dead-store elimination. If a
+ * supposedly-valid wipe ever fails, never continue to emit success. */
+static void secure_wipe(void *buffer,size_t count){
+    if(memset_s(buffer,count,0,count)!=0)abort();
+}
 static int deny(const char *label,int code){puts(label);fflush(stdout);return code;}
 static bool validFd(int fd,struct stat *out){
     if(fd<0 || fstat(fd,out)!=0)return false;
@@ -108,23 +114,23 @@ int main(int argc,const char **argv){
            before.st_mtimespec.tv_nsec!=after.st_mtimespec.tv_nsec ||
            before.st_ctimespec.tv_sec!=after.st_ctimespec.tv_sec ||
            before.st_ctimespec.tv_nsec!=after.st_ctimespec.tv_nsec){
-            explicit_bzero(buffer,sizeof(buffer));
+            secure_wipe(buffer,sizeof(buffer));
             close(fd);close(pinned);
             return deny("BBX_SNAPSHOT_CHANGED_OR_UNREADABLE",87);
         }
         unsigned char digest[CC_SHA256_DIGEST_LENGTH];
         if(!CC_SHA256(buffer,(CC_LONG)count,digest)){
-            explicit_bzero(buffer,sizeof(buffer));
+            secure_wipe(buffer,sizeof(buffer));
             close(fd);close(pinned);
             return deny("BBX_SNAPSHOT_HASH_FAILED",87);
         }
-        explicit_bzero(buffer,sizeof(buffer));
+        secure_wipe(buffer,sizeof(buffer));
         close(fd);close(pinned);
         printf("BBX_SNAPSHOT_READ %zu ",count);
         for(size_t i=0;i<CC_SHA256_DIGEST_LENGTH;i++)
             printf("%02x",(unsigned)digest[i]);
         putchar('\n');fflush(stdout);
-        explicit_bzero(digest,sizeof(digest));
+        secure_wipe(digest,sizeof(digest));
         return 0;
     }
 }

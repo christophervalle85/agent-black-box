@@ -62,8 +62,11 @@ test('native selected-file snapshot requires fd identity, bounded read and conte
   const runner=readFileSync(new URL(
     '../examples/mcp-macos-selected-snapshot.mjs',import.meta.url),'utf8');
   assert.match(native,/#import <CommonCrypto\/CommonDigest\.h>/);
-  assert.match(native,/#include <strings\.h>/);
-  assert.match(native,/explicit_bzero\(buffer,sizeof\(buffer\)\)/);
+  assert.match(native,/#define __STDC_WANT_LIB_EXT1__ 1/);
+  assert.match(native,/#include <string\.h>/);
+  assert.match(native,/memset_s\(buffer,count,0,count\)/);
+  assert.match(native,/secure_wipe\(buffer,sizeof\(buffer\)\)/);
+  assert.doesNotMatch(native,/explicit_bzero\(/);
   assert.match(runner,/-Werror=implicit-function-declaration/);
   assert.match(native,/NSOpenPanel \*panel=\[NSOpenPanel openPanel\]/);
   assert.match(native,/O_RDONLY\|O_NOFOLLOW\|O_CLOEXEC\|O_NONBLOCK/g);
