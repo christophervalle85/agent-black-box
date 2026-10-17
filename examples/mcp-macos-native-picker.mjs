@@ -14,7 +14,8 @@ const base=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const nativeSource=join(base,'native','macos','SyntheticOpenPanel.m');
 const markers=Object.freeze({
   select:Object.freeze({status:0,stdout:'BBX_MAC_PICKER_EXACT_FIXTURE_SELECTED\n'}),
-  cancel:Object.freeze({status:83,stdout:'BBX_MAC_PICKER_USER_CANCELLED\n'})
+  cancel:Object.freeze({status:83,stdout:'BBX_MAC_PICKER_USER_CANCELLED\n'}),
+  'reject-other':Object.freeze({status:87,stdout:'BBX_MAC_PICKER_OTHER_FIXTURE_REJECTED\n'})
 });
 export function assessMacSyntheticPicker(mode,observed={}){
   if(!Object.hasOwn(markers,mode))throw Error('Invalid picker test mode.');
@@ -41,11 +42,14 @@ async function main(){
     throw Error('Explicit MCP_SANDBOX=off required for ad-hoc fixture.');
   const mode=process.argv[2];
   if(process.argv.length!==3 || !Object.hasOwn(markers,mode))
-    throw Error('Expected exactly one mode: select or cancel.');
+    throw Error('Expected exactly one mode: select, cancel, or reject-other.');
   const temp=mkdtempSync(join(tmpdir(),'bb-mac-panel-fixture-'));
   try{
     const file=join(temp,'bbx-test-panel.txt');
     writeFileSync(file,'BBX synthetic picker fixture',{mode:0o600,flag:'wx'});
+    const other=join(temp,'bbx-test-other.txt');
+    if(mode==='reject-other')
+      writeFileSync(other,'BBX synthetic picker fixture',{mode:0o600,flag:'wx'});
     const executable=join(temp,'BlackBoxSyntheticOpenPanel');
     command('/usr/bin/xcrun',[
       'clang','-fobjc-arc','-std=c11','-Wall','-Wextra',
@@ -62,17 +66,22 @@ async function main(){
     console.log('PASS: Disposable AppKit Open Panel helper compiled and ad-hoc signature verified.');
     if(mode==='select')
       console.log('ACTION: Choose ONLY bbx-test-panel.txt in the macOS file-selection window, then click Select Test File.');
-    else
+    else if(mode==='cancel')
       console.log('ACTION: Click Cancel in the macOS file-selection window. DO NOT select a file.');
-    const r=spawnSync(executable,[mode,file],{
+    else
+      console.log('ACTION: NEGATIVE TEST — select ONLY bbx-test-other.txt, then click Select Test File. The helper must reject this wrong fixture. Do not select personal files.');
+    const args=mode==='reject-other'?[mode,file,other]:[mode,file];
+    const r=spawnSync(executable,args,{
       encoding:'utf8',timeout:90000,maxBuffer:4096,
       env:{PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C'}
     });
     assessMacSyntheticPicker(mode,r);
     if(mode==='select')
       console.log('PASS: Native file selection matched ONLY the disposable synthetic fixture.');
-    else
+    else if(mode==='cancel')
       console.log('PASS: Native file panel returned an explicit user-cancellation result.');
+    else
+      console.log('PASS: Native file panel rejected the independently verified alternate synthetic fixture.');
     console.log('PASS: The fixture never returned file paths or contents to the caller.');
     console.log('NOTE: No imported data, sandboxed file capability or native MCP transfer.');
   }finally{

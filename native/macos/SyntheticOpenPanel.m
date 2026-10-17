@@ -46,19 +46,36 @@ static BOOL selectedIsExactFixture(const char *selected,const char *fixture){
 }
 int main(int argc,const char *argv[]){
     @autoreleasepool{
-        if(argc!=3 ||
-           (strcmp(argv[1],"select")!=0 && strcmp(argv[1],"cancel")!=0) ||
+        const BOOL rejectOther=argc>=2 && strcmp(argv[1],"reject-other")==0;
+        if((rejectOther ? argc!=4 : argc!=3) ||
+           (strcmp(argv[1],"select")!=0 &&
+            strcmp(argv[1],"cancel")!=0 && !rejectOther) ||
            !safeFixture(argv[2]))
+            return result("BBX_MAC_PICKER_INVALID_FIXTURE",90);
+        // A negative fixture is independently validated by the native
+        // process. Success is never inferred from generic rejection.
+        if(rejectOther &&
+           (!safeFixture(argv[3]) ||
+            selectedIsExactFixture(argv[2],argv[3])))
             return result("BBX_MAC_PICKER_INVALID_FIXTURE",90);
         NSString *fixture=[NSString stringWithUTF8String:argv[2]];
         if(![fixture.lastPathComponent isEqualToString:@"bbx-test-panel.txt"])
             return result("BBX_MAC_PICKER_INVALID_FIXTURE",90);
+        if(rejectOther){
+            NSString *alternate=[NSString stringWithUTF8String:argv[3]];
+            if(![alternate.lastPathComponent isEqualToString:@"bbx-test-other.txt"] ||
+               ![alternate.stringByDeletingLastPathComponent
+                   isEqualToString:fixture.stringByDeletingLastPathComponent])
+                return result("BBX_MAC_PICKER_INVALID_FIXTURE",90);
+        }
         NSString *directory=fixture.stringByDeletingLastPathComponent;
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         NSOpenPanel *panel=[NSOpenPanel openPanel];
         panel.title=@"Agent Black Box — synthetic file-selection test";
-        panel.message=@"Select ONLY bbx-test-panel.txt (or Cancel). No document will be read.";
+        panel.message=rejectOther ?
+            @"NEGATIVE TEST: select ONLY bbx-test-other.txt. This file MUST be rejected; do not select personal files." :
+            @"Select ONLY bbx-test-panel.txt (or Cancel). No document will be read.";
         panel.prompt=@"Select Test File";
         panel.canChooseFiles=YES;
         panel.canChooseDirectories=NO;
@@ -76,6 +93,15 @@ int main(int argc,const char *argv[]){
         if(panel.URLs.count!=1 || !panel.URLs.firstObject.isFileURL)
             return result("BBX_MAC_PICKER_INVALID_SELECTION",87);
         NSString *selected=panel.URLs.firstObject.path;
+        // The negative test only passes on the alternate synthetic fixture.
+        // A generic rejection, cancellation, or selection of the allowed
+        // fixture cannot count as evidence that wrong-file denial works.
+        if(rejectOther){
+            if([selected.lastPathComponent isEqualToString:@"bbx-test-other.txt"] &&
+               selectedIsExactFixture(selected.fileSystemRepresentation,argv[3]))
+                return result("BBX_MAC_PICKER_OTHER_FIXTURE_REJECTED",87);
+            return result("BBX_MAC_PICKER_UNEXPECTED_SELECTION",86);
+        }
         // No arbitrary file picker navigation can authorize a selection:
         // the sole valid OS result is the previously staged test fixture.
         // Match the generated file's stable identity, not a lexical
