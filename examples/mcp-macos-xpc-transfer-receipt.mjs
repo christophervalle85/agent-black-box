@@ -59,7 +59,8 @@ async function main(){
     run('/usr/bin/xcrun',['clang',...flags,'-o',host,
       join(native,'TransferReceiptHost.c')],'Synthetic XPC host build');
     run('/usr/bin/xcrun',['clang',...flags,'-o',worker,
-      join(native,'TransferReceiptService.m')],'Synthetic XPC worker build');
+      join(native,'TransferReceiptService.m'),'-framework','Foundation'],
+      'Synthetic XPC worker build');
     run('/usr/bin/codesign',['--force','--sign','-','--options','runtime',
       '--identifier','dev.agentblackbox.xpc-snapshot-receipt.worker',
       '--entitlements',join(root,'native','macos','SandboxProbe.entitlements'),

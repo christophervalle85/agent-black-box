@@ -58,7 +58,7 @@ jobs:
           xcrun clang "${flags[@]}" -o "$out/LocalOperatorAuthentication" native/macos/LocalOperatorAuthentication.m -framework Foundation -framework LocalAuthentication
           xcrun clang "${flags[@]}" -o "$out/TransferReviewAuthenticator" native/macos/TransferReviewAuthenticator.m -framework Foundation -framework LocalAuthentication
           xcrun clang "${flags[@]}" -o "$out/TransferReceiptHost" native/macos/xpc/TransferReceiptHost.c
-          xcrun clang "${flags[@]}" -fno-objc-arc -o "$out/TransferReceiptWorker" native/macos/xpc/TransferReceiptService.m
+          xcrun clang "${flags[@]}" -fno-objc-arc -o "$out/TransferReceiptWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
           echo "PASS: Six native fixture executables compiled with Apple's SDK; no GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest

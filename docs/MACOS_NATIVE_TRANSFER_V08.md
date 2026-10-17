@@ -79,3 +79,7 @@ SECURITY LIMITATIONS: This is an ad-hoc-signed transport and digest/replay exper
 ### XPC receipt implementation compile check (October 17, 2026)
 
 The first macOS native compile job for the new transfer-receipt worker failed, correctly refusing an XPC dictionary enumeration callback with inferred int return type instead of bool. It also caught applying Objective-C ARC to the low-level XPC source that intentionally uses xpc_release. The worker now explicitly declares a bool-returning XPC block, and the macOS CI job compiles this specific native worker with -fno-objc-arc while retaining strict implicit-declaration checks. The test-only host itself is pure C. No real OS XPC receipt acceptance is claimed until the Mac runner build and subsequent on-device tests succeed.
+ 
+### macOS XPC worker linker correction
+
+After the callback/ARC adjustments, the macOS-15 CI compiler passed code generation but the linker reported missing __objc_personality_v0 for the Objective-C .m worker. The worker build now explicitly links the Foundation framework in both CI and the local XPC fixture runner, matching the existing AuthorityNotesService compilation. This was a compile/link gate failure; it did not exercise native XPC behavior. The real Mac receipt checks are still pending.
