@@ -36,6 +36,7 @@ jobs:
       - run: node --check examples/mcp-macos-native-picker.mjs
       - run: node --check examples/mcp-macos-selected-snapshot.mjs
       - run: node --check examples/mcp-macos-xpc-transfer-receipt.mjs
+      - run: node --check examples/mcp-macos-xpc-signed-peers.mjs
       - run: node --check src/macos-native-transfer-verifier.mjs
       - run: node --check src/macos-signer-trust.mjs
       - run: node --check src/macos-transfer-intent.mjs
@@ -59,7 +60,11 @@ jobs:
           xcrun clang "${flags[@]}" -o "$out/TransferReviewAuthenticator" native/macos/TransferReviewAuthenticator.m -framework Foundation -framework LocalAuthentication
           xcrun clang "${flags[@]}" -o "$out/TransferReceiptHost" native/macos/xpc/TransferReceiptHost.c
           xcrun clang "${flags[@]}" -fno-objc-arc -o "$out/TransferReceiptWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
-          echo "PASS: Six native fixture executables compiled with Apple's SDK; no GUI/XPC execution was attempted."
+          # This gate requires Apple's actual SDK XPC symbol declarations;
+          # no Keychain identities or secret material live on CI.
+          xcrun clang "${flags[@]}" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -o "$out/SignedTransferReceiptHost" native/macos/xpc/TransferReceiptHost.c
+          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -o "$out/SignedTransferReceiptWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
+          echo "PASS: Eight native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

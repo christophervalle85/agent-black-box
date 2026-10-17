@@ -12,6 +12,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef BBX_TEST_SIGNED_PEER_REQUIREMENT
+#include "PeerRequirementGate.h"
+#endif
 
 #define BBX_MAX_PAYLOAD 2000
 #define BBX_MAX_NONCES 64
@@ -121,9 +124,19 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
     respond(peer,message,status);
 }
 static void acceptPeer(xpc_connection_t peer){
-    // No positive code-signing peer requirement in this ad-hoc test fixture.
-    // This service has no filesystem mutation permission/API and is NOT a
-    // production authorization service.
+#ifdef BBX_TEST_SIGNED_PEER_REQUIREMENT
+    // Signed fixture only: the OS checks both same Team ID and the exact
+    // native host signing identifier BEFORE delivering any XPC message.
+    // Install once, before resume; an unavailable API must fail closed.
+    if(bbx_install_same_team_peer_requirement(
+        peer,"dev.agentblackbox.xpc-snapshot-receipt.host")!=0){
+        xpc_connection_cancel(peer);
+        return;
+    }
+#else
+    // Ad-hoc synthetic receipt mode never asserts trusted peer identity.
+    // No filesystem mutation or production transfer capability exists.
+#endif
     xpc_connection_set_event_handler(peer,^(xpc_object_t event){
         if(xpc_get_type(event)==XPC_TYPE_DICTIONARY)handle(peer,event);
     });
