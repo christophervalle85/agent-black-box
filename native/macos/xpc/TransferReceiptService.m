@@ -12,6 +12,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
+#include <unistd.h>
+#endif
 #ifdef BBX_TEST_SIGNED_PEER_REQUIREMENT
 #include "PeerRequirementGate.h"
 #endif
@@ -22,6 +25,11 @@
 static dispatch_queue_t nonceQueue;
 static char seen[BBX_MAX_NONCES][33];
 static size_t seenCount=0;
+#ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
+/* ONLY the signed, disposable on-Mac inbound-peer test includes this.
+ * Not an audit counter or an actual review authorization token. */
+static uint64_t acceptedMessageCount=0;
+#endif
 
 static bool lowerHex(const char *s,size_t n){
     if(!s || strnlen(s,n+1)!=n)return false;
@@ -138,7 +146,37 @@ static void acceptPeer(xpc_connection_t peer){
     // No filesystem mutation or production transfer capability exists.
 #endif
     xpc_connection_set_event_handler(peer,^(xpc_object_t event){
-        if(xpc_get_type(event)==XPC_TYPE_DICTIONARY)handle(peer,event);
+        if(xpc_get_type(event)!=XPC_TYPE_DICTIONARY)return;
+#ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
+        /* Count EVERY OS-delivered dictionary, including malformed ones.
+         * An unauthorized peer should never reach this callback at all. */
+        __block uint64_t delivered=0;
+        dispatch_sync(nonceQueue,^{
+            delivered=++acceptedMessageCount;
+        });
+        const char *operation=xpc_dictionary_get_string(event,"method");
+        if(operation && strcmp(operation,"signed_inbound_stats")==0){
+            __block unsigned fields=0;
+            __block bool onlyMethod=true;
+            xpc_dictionary_apply(event,^bool(const char *key,xpc_object_t value){
+                (void)value;
+                fields++;
+                if(strcmp(key,"method")!=0)onlyMethod=false;
+                return true;
+            });
+            xpc_object_t result=xpc_dictionary_create_reply(event);
+            if(result){
+                if(fields==1 && onlyMethod){
+                    xpc_dictionary_set_uint64(result,"delivered",delivered);
+                    xpc_dictionary_set_uint64(result,"workerPID",(uint64_t)getpid());
+                }
+                xpc_connection_send_message(peer,result);
+                xpc_release(result);
+            }
+            return;
+        }
+#endif
+        handle(peer,event);
     });
     xpc_connection_resume(peer);
 }
