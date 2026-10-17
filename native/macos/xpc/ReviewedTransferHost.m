@@ -1,0 +1,250 @@
+/*
+ * EXPERIMENTAL v0.8 — signed native-host Touch ID -> XPC reviewed receipt.
+ *
+ * One fixed in-binary synthetic byte snapshot. The NATIVE signed host owns
+ * the review, LAContext and the XPC connection; Node never supplies an
+ * "approved" flag, snapshot path, user bytes or bearer token. This is NOT
+ * connected to the audited controller or production MCP operations.
+ */
+#define __STDC_WANT_LIB_EXT1__ 1
+#import <Foundation/Foundation.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+#include <xpc/xpc.h>
+#include <dispatch/dispatch.h>
+#include <CommonCrypto/CommonDigest.h>
+#include <time.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "PeerRequirementGate.h"
+
+static const unsigned char fixture[]="BBX synthetic Touch ID reviewed bytes.\n";
+static const char target[]="bbx-test-reviewed.txt";
+static const char serviceID[]="dev.agentblackbox.xpc-snapshot-receipt.worker";
+#define REVIEW_LIFETIME_MS 60000
+
+typedef struct {
+    char reviewId[33];
+    char nonce[33];
+    char sha256[65];
+    int64_t issuedAt;
+    int64_t expiresAt;
+    uint64_t size;
+} NativeReview;
+static int64_t nowMs(void){
+    struct timespec t={0};
+    if(clock_gettime(CLOCK_REALTIME,&t)!=0 || t.tv_sec<0 ||
+       t.tv_sec>INT64_MAX/1000-1)return -1;
+    return (int64_t)t.tv_sec*1000+t.tv_nsec/1000000;
+}
+static void randomHex(char text[33]){
+    unsigned char random[16];
+    const char digits[]="0123456789abcdef";
+    arc4random_buf(random,sizeof(random));
+    for(size_t i=0;i<sizeof(random);i++){
+        text[2*i]=digits[random[i]>>4];
+        text[2*i+1]=digits[random[i]&15];
+    }
+    text[32]='\0';
+    if(memset_s(random,sizeof(random),0,sizeof(random))!=0)abort();
+}
+static bool hashBytes(const unsigned char *bytes,size_t count,char output[65]){
+    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+    const char alphabet[]="0123456789abcdef";
+    if(!CC_SHA256(bytes,(CC_LONG)count,hash))return false;
+    for(size_t i=0;i<CC_SHA256_DIGEST_LENGTH;i++){
+        output[2*i]=alphabet[hash[i]>>4];
+        output[2*i+1]=alphabet[hash[i]&15];
+    }
+    output[64]='\0';
+    if(memset_s(hash,sizeof(hash),0,sizeof(hash))!=0)abort();
+    return true;
+}
+static bool reviewIsExact(const NativeReview *review){
+    if(!review || review->size!=sizeof(fixture)-1 ||
+       review->size<1 || review->size>2000 ||
+       review->issuedAt<0 ||
+       review->issuedAt>INT64_MAX-REVIEW_LIFETIME_MS ||
+       review->expiresAt!=review->issuedAt+REVIEW_LIFETIME_MS)
+        return false;
+    const int64_t now=nowMs();
+    if(now<review->issuedAt || now>=review->expiresAt)return false;
+    char actual[65];
+    if(!hashBytes(fixture,sizeof(fixture)-1,actual))return false;
+    const bool match=memcmp(actual,review->sha256,65)==0;
+    if(memset_s(actual,sizeof(actual),0,sizeof(actual))!=0)abort();
+    return match;
+}
+static bool prepareReview(NativeReview *review){
+    if(!review)return false;
+    memset(review,0,sizeof(*review));
+    randomHex(review->nonce);
+    randomHex(review->reviewId);
+    if(!hashBytes(fixture,sizeof(fixture)-1,review->sha256))return false;
+    review->size=sizeof(fixture)-1;
+    review->issuedAt=nowMs();
+    if(review->issuedAt<0 || review->issuedAt>INT64_MAX-REVIEW_LIFETIME_MS)
+        return false;
+    review->expiresAt=review->issuedAt+REVIEW_LIFETIME_MS;
+    return reviewIsExact(review);
+}
+static int authenticateReview(const NativeReview *review){
+    @autoreleasepool {
+        if(!reviewIsExact(review))return 87;
+        LAContext *context=[[LAContext alloc]init];
+        context.touchIDAuthenticationAllowableReuseDuration=0;
+        NSError *preflight=nil;
+        const LAPolicy policy=LAPolicyDeviceOwnerAuthenticationWithBiometrics;
+        if(![context canEvaluatePolicy:policy error:&preflight]){
+            [context invalidate];
+            [context release];
+            return 82;
+        }
+        // The native host constructs ALL review fields, not untrusted argv.
+        // The long SHA string may be visually truncated by macOS: this is
+        // NOT yet a production immutable consent-screen design.
+        NSString *reason=[NSString stringWithFormat:
+            @"Agent Black Box TEST ONLY. Import %s, %llu bytes, SHA256 %s. No real files are changed.",
+            target,(unsigned long long)review->size,review->sha256];
+        dispatch_semaphore_t done=dispatch_semaphore_create(0);
+        __block BOOL accepted=NO;
+        __block BOOL cancelled=NO;
+        [context evaluatePolicy:policy localizedReason:reason
+                           reply:^(BOOL success,NSError *error){
+            accepted=success && error==nil;
+            cancelled=error &&
+                [error.domain isEqualToString:LAErrorDomain] &&
+                error.code==LAErrorUserCancel;
+            dispatch_semaphore_signal(done);
+        }];
+        const long result=dispatch_semaphore_wait(done,
+            dispatch_time(DISPATCH_TIME_NOW,25LL*NSEC_PER_SEC));
+        if(result!=0){
+            [context invalidate];
+            [context release];
+            return 84;
+        }
+        [context invalidate];
+        [context release];
+        // Authorization is useless if it expired during the biometric UI.
+        if(accepted)return reviewIsExact(review)?0:87;
+        return cancelled?83:87;
+    }
+}
+static xpc_connection_t openWorker(void){
+    xpc_connection_t peer=xpc_connection_create(serviceID,
+        dispatch_get_global_queue(QOS_CLASS_DEFAULT,0));
+    if(!peer)return NULL;
+    if(bbx_install_same_team_peer_requirement(peer,serviceID)!=0){
+        xpc_connection_cancel(peer);
+        xpc_release(peer);
+        return NULL;
+    }
+    xpc_connection_set_event_handler(peer,^(xpc_object_t event){
+        (void)event;
+    });
+    xpc_connection_resume(peer);
+    return peer;
+}
+static bool statusIs(xpc_connection_t peer,const NativeReview *review,
+                     const unsigned char *bytes,size_t count,
+                     const char *expected){
+    if(!reviewIsExact(review))return false;
+    xpc_object_t request=xpc_dictionary_create(NULL,NULL,0);
+    if(!request)return false;
+    xpc_dictionary_set_string(request,"method","reviewed_snapshot_receipt");
+    xpc_dictionary_set_string(request,"name",target);
+    xpc_dictionary_set_string(request,"operation","import");
+    xpc_dictionary_set_string(request,"nonce",review->nonce);
+    xpc_dictionary_set_string(request,"reviewId",review->reviewId);
+    xpc_dictionary_set_string(request,"sha256",review->sha256);
+    xpc_dictionary_set_uint64(request,"byteLength",review->size);
+    xpc_dictionary_set_int64(request,"issuedAt",review->issuedAt);
+    xpc_dictionary_set_int64(request,"expiresAt",review->expiresAt);
+    xpc_dictionary_set_data(request,"payload",bytes,count);
+    xpc_object_t reply=xpc_connection_send_message_with_reply_sync(peer,request);
+    xpc_release(request);
+    if(!reply)return false;
+    __block size_t fields=0;
+    __block bool schema=true;
+    if(xpc_get_type(reply)==XPC_TYPE_DICTIONARY)
+        xpc_dictionary_apply(reply,^bool(const char *key,xpc_object_t value){
+            fields++;
+            if(strcmp(key,"status")!=0 || xpc_get_type(value)!=XPC_TYPE_STRING)
+                schema=false;
+            return true;
+        });
+    else schema=false;
+    const char *got=schema && fields==1 ?
+        xpc_dictionary_get_string(reply,"status"):NULL;
+    bool okay=got && strcmp(got,expected)==0;
+    xpc_release(reply);
+    return okay;
+}
+int main(int argc,const char *argv[]){
+    if(argc!=2 || (strcmp(argv[1],"approved")!=0 &&
+                   strcmp(argv[1],"cancel")!=0 &&
+                   strcmp(argv[1],"expired")!=0)){
+        puts("BBX_REVIEWED_XPC_BAD_ARGS");
+        return 90;
+    }
+    NativeReview review;
+    if(!prepareReview(&review)){
+        puts("BBX_REVIEWED_XPC_SETUP_DENIED");
+        return 87;
+    }
+    // Standalone clock-negative fixture; NO LA prompt and NO XPC dispatch.
+    if(strcmp(argv[1],"expired")==0){
+        review.issuedAt-=REVIEW_LIFETIME_MS+1;
+        review.expiresAt-=REVIEW_LIFETIME_MS+1;
+        if(reviewIsExact(&review)){
+            puts("BBX_REVIEWED_XPC_EXPIRED_UNEXPECTEDLY_VALID");
+            return 87;
+        }
+        puts("BBX_REVIEWED_XPC_EXPIRED_NO_DISPATCH");
+        return 0;
+    }
+    const int auth=authenticateReview(&review);
+    if(strcmp(argv[1],"cancel")==0){
+        if(auth==83){
+            puts("BBX_REVIEWED_XPC_CANCELLED_NO_DISPATCH");
+            return 0;
+        }
+        puts("BBX_REVIEWED_XPC_CANCEL_TEST_NOT_ACCEPTED");
+        return 87;
+    }
+    if(auth!=0){
+        puts(auth==82?"BBX_REVIEWED_XPC_TOUCHID_UNAVAILABLE":
+             auth==84?"BBX_REVIEWED_XPC_TOUCHID_TIMEOUT":
+             "BBX_REVIEWED_XPC_AUTH_NOT_APPROVED");
+        return 87;
+    }
+    // The ONLY method that can connect to XPC is below the native
+    // biometric-success check, in the same signed process.
+    if(!reviewIsExact(&review))return 87;
+    xpc_connection_t peer=openWorker();
+    if(!peer){
+        puts("BBX_REVIEWED_XPC_OS_GATE_UNAVAILABLE");
+        return 85;
+    }
+    unsigned char changed[sizeof(fixture)-1];
+    memcpy(changed,fixture,sizeof(changed));
+    changed[0]^=1;
+    // One Touch ID review: changed bytes MUST be rejected; exact bytes
+    // may be accepted once, and replay must then be rejected.
+    bool valid=statusIs(peer,&review,changed,sizeof(changed),
+                         "DIGEST_MISMATCH") &&
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,"ACCEPTED") &&
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,"REPLAY");
+    if(memset_s(changed,sizeof(changed),0,sizeof(changed))!=0)abort();
+    xpc_connection_cancel(peer);
+    xpc_release(peer);
+    if(!valid){
+        puts("BBX_REVIEWED_XPC_TRANSACTION_NOT_ACCEPTED");
+        return 87;
+    }
+    puts("BBX_REVIEWED_XPC_TOUCHID_APPROVED_TAMPER_REPLAY_BLOCKED");
+    return 0;
+}

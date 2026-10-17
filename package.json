@@ -47,7 +47,8 @@
     "mcp:mac-selected-snapshot": "node examples/mcp-macos-selected-snapshot.mjs",
     "mcp:mac-xpc-transfer-receipt": "node examples/mcp-macos-xpc-transfer-receipt.mjs",
     "mcp:mac-xpc-signed-peers": "node examples/mcp-macos-xpc-signed-peers.mjs",
-    "mcp:mac-xpc-inbound-signed": "node examples/mcp-macos-xpc-inbound-signed.mjs"
+    "mcp:mac-xpc-inbound-signed": "node examples/mcp-macos-xpc-inbound-signed.mjs",
+    "mcp:mac-xpc-native-reviewed": "node examples/mcp-macos-xpc-native-reviewed.mjs"
   },
   "license": "MIT"
 }

@@ -38,6 +38,7 @@ jobs:
       - run: node --check examples/mcp-macos-xpc-transfer-receipt.mjs
       - run: node --check examples/mcp-macos-xpc-signed-peers.mjs
       - run: node --check examples/mcp-macos-xpc-inbound-signed.mjs
+      - run: node --check examples/mcp-macos-xpc-native-reviewed.mjs
       - run: node --check src/macos-native-transfer-verifier.mjs
       - run: node --check src/macos-signer-trust.mjs
       - run: node --check src/macos-transfer-intent.mjs
@@ -67,7 +68,9 @@ jobs:
           xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -o "$out/SignedTransferReceiptWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
           xcrun clang "${flags[@]}" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -o "$out/SignedInboundHost" native/macos/xpc/SignedInboundHost.c
           xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_SIGNED_INBOUND_EVIDENCE=1 -o "$out/SignedInboundWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
-          echo "PASS: Ten native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
+          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -o "$out/ReviewedTransferHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication
+          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -o "$out/ReviewedTransferWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
+          echo "PASS: Twelve native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

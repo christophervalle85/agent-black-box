@@ -12,6 +12,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+#include <time.h>
+#include <limits.h>
+#endif
 #ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
 #include <unistd.h>
 #endif
@@ -58,11 +62,23 @@ static bool exactKeys(xpc_object_t request){
         (void)value;
         if(strcmp(key,"method")!=0 && strcmp(key,"name")!=0 &&
            strcmp(key,"nonce")!=0 && strcmp(key,"sha256")!=0 &&
-           strcmp(key,"payload")!=0)valid=false;
+           strcmp(key,"payload")!=0
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+           && strcmp(key,"operation")!=0 &&
+           strcmp(key,"reviewId")!=0 &&
+           strcmp(key,"byteLength")!=0 &&
+           strcmp(key,"issuedAt")!=0 &&
+           strcmp(key,"expiresAt")!=0
+#endif
+           )valid=false;
         count++;
         return true;
     });
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+    return valid && count==10;
+#else
     return valid && count==5;
+#endif
 }
 static bool isType(xpc_object_t request,const char *key,xpc_type_t type){
     xpc_object_t item=xpc_dictionary_get_value(request,key);
@@ -95,7 +111,15 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
        !isType(message,"name",XPC_TYPE_STRING) ||
        !isType(message,"nonce",XPC_TYPE_STRING) ||
        !isType(message,"sha256",XPC_TYPE_STRING) ||
-       !isType(message,"payload",XPC_TYPE_DATA)){
+       !isType(message,"payload",XPC_TYPE_DATA)
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+       || !isType(message,"operation",XPC_TYPE_STRING)
+       || !isType(message,"reviewId",XPC_TYPE_STRING)
+       || !isType(message,"byteLength",XPC_TYPE_UINT64)
+       || !isType(message,"issuedAt",XPC_TYPE_INT64)
+       || !isType(message,"expiresAt",XPC_TYPE_INT64)
+#endif
+       ){
         respond(peer,message,"BAD_REQUEST");
         return;
     }
@@ -105,12 +129,40 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
     const char *sha=xpc_dictionary_get_string(message,"sha256");
     size_t count=0;
     const void *bytes=xpc_dictionary_get_data(message,"payload",&count);
-    if(!method || strcmp(method,"snapshot_receipt")!=0 ||
+    if(!method ||
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+       strcmp(method,"reviewed_snapshot_receipt")!=0 ||
+#else
+       strcmp(method,"snapshot_receipt")!=0 ||
+#endif
        !testName(name) || !lowerHex(nonce,32) || !lowerHex(sha,64) ||
        count<1 || count>BBX_MAX_PAYLOAD || !bytes){
         respond(peer,message,"BAD_REQUEST");
         return;
     }
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+    const char *operation=xpc_dictionary_get_string(message,"operation");
+    const char *reviewId=xpc_dictionary_get_string(message,"reviewId");
+    const uint64_t statedSize=xpc_dictionary_get_uint64(message,"byteLength");
+    const int64_t issued=xpc_dictionary_get_int64(message,"issuedAt");
+    const int64_t expires=xpc_dictionary_get_int64(message,"expiresAt");
+    if(!operation || strcmp(operation,"import")!=0 ||
+       !lowerHex(reviewId,32) || statedSize!=count ||
+       issued<0 || issued>INT64_MAX-60000 || expires!=issued+60000){
+        respond(peer,message,"BAD_REQUEST");
+        return;
+    }
+    struct timespec wall={0};
+    if(clock_gettime(CLOCK_REALTIME,&wall)!=0){
+        respond(peer,message,"BAD_REQUEST");
+        return;
+    }
+    const int64_t now=(int64_t)wall.tv_sec*1000+wall.tv_nsec/1000000;
+    if(now<issued || now>=expires){
+        respond(peer,message,"REVIEW_EXPIRED");
+        return;
+    }
+#endif
     if(!digestMatches(bytes,count,sha)){
         respond(peer,message,"DIGEST_MISMATCH");
         return;
