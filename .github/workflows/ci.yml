@@ -40,6 +40,23 @@ jobs:
       - run: node --check src/macos-transfer-intent.mjs
       - run: node --check src/macos-transfer-review.mjs
       - run: node --check src/macos-transfer-controller.mjs
+  macos-native-compile:
+    # Run a real Apple SDK compile, NOT a GUI authentication/file-picker test.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native macOS fixture helpers with implicit declarations forbidden
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/bbx-native-compile"
+          mkdir -p "$out"
+          flags=(-fobjc-arc -fblocks -std=c11 -Wall -Wextra -Werror=implicit-function-declaration -O2)
+          xcrun clang "${flags[@]}" -o "$out/SelectedFileSnapshot" native/macos/SelectedFileSnapshot.m -framework AppKit -framework Foundation
+          xcrun clang "${flags[@]}" -o "$out/SyntheticOpenPanel" native/macos/SyntheticOpenPanel.m -framework AppKit -framework Foundation
+          xcrun clang "${flags[@]}" -o "$out/LocalOperatorAuthentication" native/macos/LocalOperatorAuthentication.m -framework Foundation -framework LocalAuthentication
+          xcrun clang "${flags[@]}" -o "$out/TransferReviewAuthenticator" native/macos/TransferReviewAuthenticator.m -framework Foundation -framework LocalAuthentication
+          echo "PASS: All four native fixture executables compiled with Apple's SDK; no GUI tests were run."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h> // macOS declares explicit_bzero here.
 #include <stdbool.h>
 #include <stdint.h>
 

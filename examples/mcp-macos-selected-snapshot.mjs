@@ -63,7 +63,8 @@ async function main(){
     writeFileSync(file,staged,{mode:0o600,flag:'wx'});
     const executable=join(temp,'BlackBoxSelectedFileSnapshot');
     cmd('/usr/bin/xcrun',[
-      'clang','-fobjc-arc','-std=c11','-Wall','-Wextra','-O2',
+      'clang','-fobjc-arc','-std=c11','-Wall','-Wextra',
+      '-Werror=implicit-function-declaration','-O2',
       '-o',executable,source,'-framework','AppKit','-framework','Foundation'
     ],'Native snapshot build');
     cmd('/usr/bin/codesign',[

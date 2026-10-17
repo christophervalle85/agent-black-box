@@ -26,3 +26,9 @@ An incorrect selection, cancellation, timeout, missing prompt, unavailable devel
 Actual native import/export and XPC data transfer remain disabled. The ad-hoc helper is not Developer ID signed, the signed host/worker are not authenticated as same-Team-ID peers in production, a user-initiated picker has not yet been integrated with the review-specific Touch ID/HMAC authority, and durable file capabilities, atomic commit, race-safe transaction handling and worker-side checks remain outstanding. Production MCP_SANDBOX=required stays fail-closed.
 
 Reference: https://developer.apple.com/documentation/Security/accessing-files-from-the-macos-app-sandbox
+
+## October 17, 2026 — native compile failure and prevention
+
+The first real Mac `select` and `altered` snapshot attempts **both failed during compilation**, before opening NSOpenPanel. Apple's Clang reported an undeclared `explicit_bzero` in SelectedFileSnapshot.m. The issue is the missing `#include <strings.h>` (the macOS declaration header), not an observed failure of file-descriptor validation. We fixed the native include without weakening the explicit memory zeroing. The executable's local build now treats implicit function declarations as errors.
+
+To prevent this Linux-only-CI blind spot, CI has a **macos-15 native compile** job for the snapshot fixture and three previously accepted native helpers using the real Apple SDK and `-Werror=implicit-function-declaration`. A successful macOS compile job confirms only native compilation, not OS prompt behavior, sandbox authorization, or successful file reads. These two Phase 6 GUI acceptance tests remain **PENDING** until rerun on the user's Mac after synchronizing the fixed branch.
