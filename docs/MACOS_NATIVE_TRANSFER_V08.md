@@ -83,3 +83,25 @@ The first macOS native compile job for the new transfer-receipt worker failed, c
 ### macOS XPC worker linker correction
 
 After the callback/ARC adjustments, the macOS-15 CI compiler passed code generation but the linker reported missing __objc_personality_v0 for the Objective-C .m worker. The worker build now explicitly links the Foundation framework in both CI and the local XPC fixture runner, matching the existing AuthorityNotesService compilation. This was a compile/link gate failure; it did not exercise native XPC behavior. The real Mac receipt checks are still pending.
+
+## October 17, 2026 — real macOS synthetic XPC receipt acceptance PASSED
+
+The operator executed all three disposable native XPC experiments in an interactive macOS session after commit 7bc236a. Each ad-hoc native host/worker pair built, signed and verified; the worker was nested and sandbox-entitled. The observed results:
+
+- `MCP_SANDBOX=off npm run mcp:mac-xpc-transfer-receipt -- valid`: **PASS**. The worker accepted the fixed synthetic payload when its recomputed SHA-256 matched the supplied digest.
+- `MCP_SANDBOX=off npm run mcp:mac-xpc-transfer-receipt -- tamper`: **PASS**. The worker refused deliberately altered bytes, then accepted the correct bytes with the same nonce. This proves digest failure did not consume that nonce.
+- `MCP_SANDBOX=off npm run mcp:mac-xpc-transfer-receipt -- replay`: **PASS**. The worker accepted the first request and refused reuse of the same nonce within the same worker process.
+
+**This isolated XPC transport acceptance gate is complete.** These runs prove on-device outcomes for the fixed-payload transport/digest/nonce tests, not OS-authenticated application identity or a real file transfer. The worker does not know whether any specific request was reviewed or authorized. A malicious, unsigned or ad-hoc-signed local client may be able to produce a well-formed payload and digest, because the worker currently has no production incoming-peer requirement. Also, the replay cache is volatile; it does not establish cross-restart replay resistance. No user files, picker-selected bytes, Touch ID proof, controller approvals or filesystem writes traveled through the tested channel.
+
+### Next engineering boundary (NOT ACCEPTED): host-owned, reviewed native transaction
+
+Do not simply add reviewId/nonce/digest fields to the existing XPC dictionary and label the transfer 'authorized': a self-asserted review ID or digest does not prove user consent, host identity or permission. Instead:
+
+1. Build a single trusted native-host flow that owns the user-selected file descriptor, snapshots bounded bytes, obtains a fresh review for those exact bytes, and presents a visible, immutable operation/target/size/hash review.
+2. Require the real LocalAuthentication result on that same reviewed transaction; do not let a Node/HTTP/model-provided success flag act as OS-authentication evidence. Deny cancellation, expiry, altered bytes and review mismatch before any worker dispatch.
+3. Establish OS-enforced code-signing peer requirements on **both sides** of the XPC channel before any transfer authority can cross it. Ad-hoc signing is insufficient for positive same-Team-ID trust. The existing negative peer requirement experiments are not substitutes for a positive signed-pair acceptance.
+4. Treat an approved review as single-use; independently bind operation, destination, payload digest, size and fresh transaction nonce. Prevent a worker from honoring arbitrary self-declared manifests from untrusted callers. If the worker crashes, times out or has an unknown commit state, fail closed and preserve audit evidence.
+5. Add a regression matrix for wrong identity, wrong review, cancelled auth, expired review, modified bytes, replay, worker restart, unauthorized filesystem access, and disclosure of paths/contents. A successful synthetic XPC receipt alone must never enable MCP_SANDBOX=required or document imports.
+
+Production rollout blocker: verified signing identities / same-Team-ID enforcement and a trusted native UI/consent chain. Until then, the experimental receipt worker must not perform filesystem mutation and must stay unreachable from the ordinary MCP tool surface.
