@@ -26,6 +26,24 @@ static BOOL safeFixture(const char *path){
         return NO;
     return YES;
 }
+/*
+ * NSOpenPanel may return /private/var/... where the test runner staged
+ * /var/...; lexical paths differ even when both refer to the same file.
+ *
+ * Comparing lstat(2) device/inode identifies the exact fixture across
+ * symlinked parent path aliases. Both leaves must remain independently
+ * verified regular owner-owned files with nlink=1 and expected size, so a
+ * user-selected symlink, hard link, or a different document is rejected.
+ * This diagnostic NEVER opens or reads either selected file.
+ */
+static BOOL selectedIsExactFixture(const char *selected,const char *fixture){
+    if(!safeFixture(selected) || !safeFixture(fixture))return NO;
+    struct stat selectedStat,fixtureStat;
+    if(lstat(selected,&selectedStat)!=0 || lstat(fixture,&fixtureStat)!=0)
+        return NO;
+    return selectedStat.st_dev==fixtureStat.st_dev &&
+           selectedStat.st_ino==fixtureStat.st_ino;
+}
 int main(int argc,const char *argv[]){
     @autoreleasepool{
         if(argc!=3 ||
@@ -60,8 +78,10 @@ int main(int argc,const char *argv[]){
         NSString *selected=panel.URLs.firstObject.path;
         // No arbitrary file picker navigation can authorize a selection:
         // the sole valid OS result is the previously staged test fixture.
-        if(strcmp(selected.fileSystemRepresentation,fixture.fileSystemRepresentation)!=0 ||
-           !safeFixture(argv[2]))
+        // Match the generated file's stable identity, not a lexical
+        // spelling that AppKit may normalize from /var to /private/var.
+        if(![selected.lastPathComponent isEqualToString:@"bbx-test-panel.txt"] ||
+           !selectedIsExactFixture(selected.fileSystemRepresentation,argv[2]))
             return result("BBX_MAC_PICKER_OUTSIDE_FIXTURE",87);
         if(strcmp(argv[1],"cancel")==0)
             return result("BBX_MAC_PICKER_UNEXPECTED_SELECTION",86);

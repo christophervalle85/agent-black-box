@@ -1,6 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {
+  readFileSync,mkdtempSync,mkdirSync,writeFileSync,symlinkSync,lstatSync,linkSync,rmSync
+} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {assessMacSyntheticPicker} from '../examples/mcp-macos-native-picker.mjs';
 
 const approved=Object.freeze({
@@ -46,7 +50,12 @@ test('native panel fixture never reads files and checks the chosen path against 
   assert.match(native,/lstat\(path,&details\)/);
   assert.match(native,/S_ISREG\(details\.st_mode\)/);
   assert.match(native,/details\.st_nlink!=1/);
-  assert.match(native,/strcmp\(selected\.fileSystemRepresentation,fixture\.fileSystemRepresentation\)/);
+  assert.match(native,/selectedIsExactFixture\(selected\.fileSystemRepresentation,argv\[2\]\)/);
+  assert.match(native,/selectedStat\.st_dev==fixtureStat\.st_dev/);
+  assert.match(native,/selectedStat\.st_ino==fixtureStat\.st_ino/);
+  assert.match(native,/!safeFixture\(selected\) \|\| !safeFixture\(fixture\)/);
+  assert.match(native,/lstat\(selected,&selectedStat\)/);
+  assert.doesNotMatch(native,/strcmp\(selected\.fileSystemRepresentation,fixture\.fileSystemRepresentation\)/);
   assert.match(native,/BBX_MAC_PICKER_OUTSIDE_FIXTURE/);
   assert.doesNotMatch(native,/\b(?:open|fopen|read|fread|system|popen)\s*\(/);
   assert.match(cli,/process\.platform!=='darwin'/);
@@ -55,4 +64,36 @@ test('native panel fixture never reads files and checks the chosen path against 
   assert.match(cli,/writeFileSync\(file,'BBX synthetic picker fixture'/);
   assert.match(cli,/rmSync\(temp,\{recursive:true,force:true\}\)/);
   assert.doesNotMatch(cli,/createBlackBoxServer|createAuditedMacTransferController/);
+});
+
+test('parent-directory alias resolves to same inode; a different file and link leaves do not',()=>{
+  const root=mkdtempSync(join(tmpdir(),'bbx-picker-ident-'));
+  try{
+    const originalDir=join(root,'real');
+    const aliasDir=join(root,'alias');
+    mkdirSync(originalDir,{mode:0o700});
+    const filename='bbx-test-panel.txt';
+    const expected=join(originalDir,filename);
+    writeFileSync(expected,'BBX synthetic picker fixture',{mode:0o600});
+    symlinkSync(originalDir,aliasDir,'dir');
+    const selected=join(aliasDir,filename);
+    const originalStat=lstatSync(expected);
+    const aliasedStat=lstatSync(selected);
+    assert.notEqual(selected,expected);
+    assert.equal(originalStat.dev,aliasedStat.dev);
+    assert.equal(originalStat.ino,aliasedStat.ino);
+    assert.equal(aliasedStat.isFile(),true);
+    assert.equal(aliasedStat.nlink,1);
+    const different=join(originalDir,'bbx-test-other.txt');
+    writeFileSync(different,'BBX synthetic picker fixture');
+    assert.notEqual(lstatSync(different).ino,originalStat.ino);
+    const leafLink=join(originalDir,'bbx-test-link.txt');
+    symlinkSync(expected,leafLink);
+    assert.equal(lstatSync(leafLink).isSymbolicLink(),true);
+    const hardLink=join(originalDir,'bbx-test-hard.txt');
+    linkSync(expected,hardLink);
+    assert.equal(lstatSync(expected).nlink,2);
+  }finally{
+    rmSync(root,{recursive:true,force:true});
+  }
 });
