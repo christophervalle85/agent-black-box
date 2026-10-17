@@ -12,7 +12,7 @@ This feature tests a real, user-initiated macOS NSOpenPanel selection and bounde
 - stdout includes only a fixed receipt carrying byte length and lowercase SHA-256. The trusted Node runner requires an exact process outcome and receipt, and uses constant-time digest comparison.
 - All fixtures and binaries are deleted after the test. The entire experiment requires MCP_SANDBOX=off, never required mode.
 
-## Real macOS acceptance — pending
+## Real macOS acceptance — passed October 17, 2026
 After switching to feature/v0.8-native-transfers and updating it, run each command individually:
 
     MCP_SANDBOX=off npm run mcp:mac-selected-snapshot -- select
@@ -29,12 +29,35 @@ Reference: https://developer.apple.com/documentation/Security/accessing-files-fr
 
 ## October 17, 2026 — native compile failure and prevention
 
-The first real Mac `select` and `altered` snapshot attempts **both failed during compilation**, before opening NSOpenPanel. Apple's Clang reported an undeclared `explicit_bzero` in SelectedFileSnapshot.m. The issue is the missing `#include <strings.h>` (the macOS declaration header), not an observed failure of file-descriptor validation. We fixed the native include without weakening the explicit memory zeroing. The executable's local build now treats implicit function declarations as errors.
+The first real Mac `select` and `altered` snapshot attempts **both failed during compilation**, before opening NSOpenPanel. Apple's Clang reported an undeclared `explicit_bzero` in SelectedFileSnapshot.m. The initial hypothesis was a missing function declaration header; the next macOS CI run demonstrated that adding `strings.h` was insufficient. Neither failed compilation run reached file-descriptor validation. The executable's local build now treats implicit function declarations as errors.
 
-To prevent this Linux-only-CI blind spot, CI has a **macos-15 native compile** job for the snapshot fixture and three previously accepted native helpers using the real Apple SDK and `-Werror=implicit-function-declaration`. A successful macOS compile job confirms only native compilation, not OS prompt behavior, sandbox authorization, or successful file reads. These two Phase 6 GUI acceptance tests remain **PENDING** until rerun on the user's Mac after synchronizing the fixed branch.
+To prevent this Linux-only-CI blind spot, CI has a **macos-15 native compile** job for the snapshot fixture and three previously accepted native helpers using the real Apple SDK and `-Werror=implicit-function-declaration`. A successful macOS compile job confirms only native compilation, not OS prompt behavior, sandbox authorization, or successful file reads. At that stage, both Phase 6 GUI tests still required a real-Mac rerun.
 
 ## October 17, 2026 — follow-up CI result and SDK-compatible secure zeroing
 
 The new **real macOS 15 native CI compile job failed** even after adding strings.h: `explicit_bzero` is not declared in the Xcode SDK tested. We therefore replaced `explicit_bzero` with Apple's documented `memset_s`, enabled by defining `__STDC_WANT_LIB_EXT1__ 1` before system headers. The secure_wipe helper treats any unexpected wipe error as fatal instead of continuing. Source contract tests cover the declaration and secure-wipe use.
 
-The macOS compile job remains required and will be checked on this follow-up commit. Do not mark either native GUI acceptance as passed until the user runs the select and altered fixture workflows on the actual Mac after CI succeeds.
+The macOS compile job remains required and will be checked on this follow-up commit. Both native GUI tests were pending at the time of that fix; the successful results are documented below.
+
+## October 17, 2026 — real Mac selected-file snapshots ACCEPTED
+
+The operator reran both commands on the development Mac after the native-macos-compile CI fix (commit 92a2d796). The following results were observed directly:
+
+- `MCP_SANDBOX=off npm run mcp:mac-selected-snapshot -- select`: **PASS**. The disposable AppKit/Objective-C helper compiled, its ad-hoc signature verified, and the OS picker returned the generated `bbx-test-snapshot.txt`. The already-opened, bounded file descriptor read yielded the expected SHA-256 digest and exact byte count. The helper printed neither the selected path nor its content.
+- `MCP_SANDBOX=off npm run mcp:mac-selected-snapshot -- altered`: **PASS**. The same synthetic fixture was deliberately modified by one byte *before opening the panel*. The native helper successfully read and hashed that modified fixture, and the Node verdict rejected the altered digest against the expected original digest. This is controlled content-integrity testing, not a simultaneous modification or filesystem race.
+
+**Acceptance scope complete for this slice:** native file-selection, bounded synthetic FD read, exact digest verification, and altered-content rejection all passed on a real Mac. The four-job CI run for the SDK-compatible source also passed (174/174 Node tests, native compilation, Linux sandbox, and MCP interoperability): https://github.com/christophervalle85/agent-black-box/actions/runs/39071303426
+
+**What the evidence does NOT establish:** a user document was transferred, a native host passed data into XPC, code-signing identities were approved for production, prompt consent and file selection were tied to the same review, or kernel-mediated sandbox access was fully verified. The 2 KiB generated file is the only permitted read target in the present experiment. No release gate for `MCP_SANDBOX=required` was changed.
+
+## Next independent gate: bounded reviewed bytes across authenticated native XPC
+
+The next substantive security step should be a **separately tested, synthetic-only native transfer path**, not a generic request to 'open files'. Before any real document import, enforce these design constraints:
+
+1. The trusted native host must own the NSOpenPanel interaction and read the selected file from a verified descriptor into a bounded, immutable snapshot. A path, copied URL, or digest-only receipt cannot be treated as an XPC authorization grant.
+2. Issue one review for the exact operation, synthetic destination, data size, full SHA-256, unpredictable nonce and expiration. Present the review to the operator, run macOS authentication, and confirm pending state and unchanged bytes before authorizing one use.
+3. Only a verified host-to-worker XPC channel can deliver the bounded bytes; the private sandboxed worker must independently verify the digest, destination constraints, nonce/authorization state, and single-use semantics. No remote model or ordinary HTTP request may set authority fields.
+4. Reject cancel, wrong file, changed bytes, replay, forged or expired review, unauthorized XPC peers, worker crash, timeout, and partial commits with clear HMAC audit outcomes. An uncertain write must not be described as successful.
+5. Preserve `MCP_SANDBOX=required` fail-closed until native positive **and** negative Developer ID / same-Team-ID code identity checks, App Sandbox confinement, and end-to-end on-device acceptance are complete.
+
+Next-phase status: **not implemented**. The current Phase 6 commit is not a production document-transfer feature; do not merge or open a review PR until the next cohesive set of security gates is actually supported.
