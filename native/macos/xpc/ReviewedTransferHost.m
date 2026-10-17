@@ -206,7 +206,14 @@ int main(int argc,const char *argv[]){
         puts("BBX_REVIEWED_XPC_EXPIRED_NO_DISPATCH");
         return 0;
     }
+    const NativeReview committed=review; // Immutable local pre-auth snapshot.
     const int auth=authenticateReview(&review);
+    // Touch ID can approve only the exact review metadata it was shown.
+    // Fail closed if nonce, ID, expiry, size or digest changed in memory.
+    if(memcmp(&review,&committed,sizeof(review))!=0){
+        puts("BBX_REVIEWED_XPC_REVIEW_CHANGED");
+        return 87;
+    }
     if(strcmp(argv[1],"cancel")==0){
         if(auth==83){
             puts("BBX_REVIEWED_XPC_CANCELLED_NO_DISPATCH");

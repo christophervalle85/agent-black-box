@@ -60,8 +60,8 @@ async function main(){
   if(process.env.MCP_SANDBOX!=='off')
     throw Error('Opt-in synthetic test must use MCP_SANDBOX=off.');
   const mode=process.argv[2];
-  if(process.argv.length!==3 || !Object.hasOwn(marker,mode))
-    throw Error('Expected exactly one mode: approved, cancel or expired.');
+  if(process.argv.length!==3 || (!Object.hasOwn(marker,mode) && mode!=='all'))
+    throw Error('Expected exactly one mode: all, approved, cancel or expired.');
   const identity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Apple Development certificate discovery').stdout);
@@ -105,18 +105,29 @@ async function main(){
       throw Error('Signing Team ID mismatch; native review denied.');
     verifyWorkerSandbox(service);
     console.log('PASS: Apple Development-signed native Touch ID host and sandboxed XPC worker verified with matching Team IDs.');
-    console.log('ACTION: Native synthetic '+mode+' review. No user files or MCP tools.');
-    const outcome=spawnSync(host,[mode],{
-      encoding:'utf8',timeout:35000,maxBuffer:1024,
-      env:{PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C'}
-    });
-    assessNativeReviewedXpc(mode,outcome);
-    if(mode==='approved')
-      console.log('PASS: Native biometric approval permitted exact bytes once; altered bytes and replay were denied by the signed XPC worker.');
-    else if(mode==='cancel')
-      console.log('PASS: Explicit user cancellation blocked XPC dispatch within the signed native host.');
-    else
-      console.log('PASS: Expired synthetic native review denied before biometric prompt or XPC dispatch.');
+    // The combined test uses ONE signed app for all three independent
+    // transactions, avoiding redundant Keychain private-key prompts.
+    const checks=mode==='all'?['expired','approved','cancel']:[mode];
+    for(const check of checks){
+      console.log('ACTION: Native synthetic '+check+' review. No user files or MCP tools.');
+      if(check==='approved')
+        console.log('INSTRUCTION: At the native Touch ID prompt, approve with your enrolled fingerprint.');
+      else if(check==='cancel')
+        console.log('INSTRUCTION: At the native Touch ID prompt, choose Cancel. Do NOT approve this test.');
+      else
+        console.log('INSTRUCTION: Expired mode requires no Touch ID prompt.');
+      const outcome=spawnSync(host,[check],{
+        encoding:'utf8',timeout:35000,maxBuffer:1024,
+        env:{PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C'}
+      });
+      assessNativeReviewedXpc(check,outcome);
+      if(check==='approved')
+        console.log('PASS: Native biometric approval permitted exact bytes once; altered bytes and replay were denied by the signed XPC worker.');
+      else if(check==='cancel')
+        console.log('PASS: Explicit user cancellation blocked XPC dispatch within the signed native host.');
+      else
+        console.log('PASS: Expired synthetic native review denied before biometric prompt or XPC dispatch.');
+    }
     console.log('NOTE: No HMAC audit-controller binding, native file selection, real documents, or production sandbox authorization.');
   }finally{
     rmSync(temp,{recursive:true,force:true});
