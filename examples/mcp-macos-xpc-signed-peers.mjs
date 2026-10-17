@@ -42,11 +42,39 @@ export function selectLocalDevelopmentIdentity(output){
     throw Error('Exactly one valid Apple Development Keychain identity is required. Do not use ad-hoc signing.');
   return choices[0][1]; // Used only within codesign argv, NEVER printed.
 }
+/**
+ * Deliberately classify only known codesign failures, never echo raw stderr,
+ * executable paths, certificate names, Team IDs or Keychain metadata.
+ * Unknown causes remain unknown rather than being mistaken for XPC denial.
+ */
+export function describeCodesignFailure(observed){
+  const data=String(observed?.stderr??'')+'\n'+String(observed?.stdout??'');
+  const cases=[
+    [/errSecInternalComponent/i,'Keychain signing operation failed (errSecInternalComponent)'],
+    [/user interaction is not allowed|errSecInteractionNotAllowed|CSSMERR_CSP_NO_USER_INTERACTION/i,
+      'Keychain authorization or user interaction unavailable'],
+    [/user canceled|user cancelled|errSecUserCanceled/i,'Keychain authorization was cancelled'],
+    [/identity.*(?:not found|missing)|no identity found|specified item could not be found/i,
+      'Signing identity or private key unavailable'],
+    [/keychain.*locked|locked.*keychain/i,'Keychain is locked'],
+    [/resource fork|Finder information|detritus not allowed/i,
+      'Signing target contains unsupported metadata'],
+    [/timed out/i,'Signing command timed out']
+  ];
+  const reason=observed?.error?.code==='ETIMEDOUT'?'Signing command timed out':
+    cases.find(([pattern])=>pattern.test(data))?.[1]??'Unclassified signing failure';
+  const exit=Number.isInteger(observed?.status)?observed.status:'unknown';
+  return reason+'; exit status '+exit;
+}
 function command(exe,args,label,{maxBuffer=16384,timeout=30000}={}){
   const r=spawnSync(exe,args,{encoding:'utf8',timeout,maxBuffer,
     env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}});
-  if(r.error || r.signal || r.status!==0)
+  if(r.error || r.signal || r.status!==0){
+    if(exe==='/usr/bin/codesign' && args.includes('--sign'))
+      throw Error(label+' failed ('+describeCodesignFailure(r)+
+        '); no signed XPC evidence was accepted.');
     throw Error(label+' failed; no signed XPC evidence was accepted.');
+  }
   return r;
 }
 export function parseSignedIdentity(display,expectedIdentifier){
@@ -79,8 +107,8 @@ async function main(){
   if(process.env.MCP_SANDBOX!=='off')
     throw Error('Explicit MCP_SANDBOX=off required for this disposable developer-signing test.');
   const mode=process.argv[2];
-  if(process.argv.length!==3 || !Object.hasOwn(expected,mode))
-    throw Error('Expected signed-valid or wrong-worker.');
+  if(process.argv.length!==3 || (!Object.hasOwn(expected,mode) && mode!=='both'))
+    throw Error('Expected signed-valid, wrong-worker or both.');
   const signingIdentity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Local Apple Development identity lookup').stdout);
@@ -125,16 +153,21 @@ async function main(){
       throw Error('Host and worker Team IDs differ; trust gate denied.');
     assertWorkerSandbox(service);
     console.log('PASS: Apple Development-signed host and sandboxed worker have matching Team IDs and exact signing identifiers.');
-    console.log('ACTION: Checking OS-enforced signed XPC peer identity ('+mode+'); no documents or Touch ID prompts.');
-    const observed=spawnSync(host,[mode],{
-      encoding:'utf8',timeout:15000,maxBuffer:1024,
-      env:{PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C'}
-    });
-    assessSignedPeerExperiment(mode,observed);
-    if(mode==='signed-valid')
-      console.log('PASS: OS-gated same-Team signed host and worker exchanged one bounded synthetic digest receipt.');
-    else
-      console.log('PASS: OS returned the specific code-signing-requirement error for a wrong worker signing identifier.');
+    // Both checks share the SAME signed bundle, so a second, unrelated
+    // codesign/Keychain operation cannot obscure OS rejection evidence.
+    const checks=mode==='both'?['signed-valid','wrong-worker']:[mode];
+    for(const check of checks){
+      console.log('ACTION: Checking OS-enforced signed XPC peer identity ('+check+'); no documents or Touch ID prompts.');
+      const observed=spawnSync(host,[check],{
+        encoding:'utf8',timeout:15000,maxBuffer:1024,
+        env:{PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C'}
+      });
+      assessSignedPeerExperiment(check,observed);
+      if(check==='signed-valid')
+        console.log('PASS: OS-gated same-Team signed host and worker exchanged one bounded synthetic digest receipt.');
+      else
+        console.log('PASS: OS returned the specific code-signing-requirement error for a wrong worker signing identifier.');
+    }
     console.log('NOTE: This validates test-only signed-peer identity, not operator approval or a production document transfer.');
   }finally{
     rmSync(temp,{recursive:true,force:true});

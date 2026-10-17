@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {
   assessSignedPeerExperiment,parseSignedIdentity,
-  selectLocalDevelopmentIdentity
+  selectLocalDevelopmentIdentity,describeCodesignFailure
 } from '../examples/mcp-macos-xpc-signed-peers.mjs';
 
 const SHA='A'.repeat(40);
@@ -83,4 +83,38 @@ test('OS peer requirements are opt-in for developer-signed diagnostic only',()=>
   assert.match(harness,/com\\\.apple\\\.security\\\.app-sandbox/);
   assert.match(harness,/MCP_SANDBOX!=='off'/);
   assert.doesNotMatch(harness,/createBlackBoxServer|createAuditedMacTransferController/);
+});
+
+test('codesign failure diagnostics distinguish known Keychain causes without echoing secrets',()=>{
+  const privatePath='/Users/someone/Private Example.app';
+  const identity='Apple Development: someone@example.com (TEAM123456)';
+  const examples=[
+    ['errSecInternalComponent','Keychain signing operation failed'],
+    ['User interaction is not allowed','Keychain authorization or user interaction unavailable'],
+    ['User canceled','Keychain authorization was cancelled'],
+    ['The specified item could not be found in the keychain','Signing identity or private key unavailable'],
+    ['keychain is locked','Keychain is locked'],
+    ['resource fork, Finder information, or similar detritus not allowed',
+      'Signing target contains unsupported metadata']
+  ];
+  for(const [diagnostic,expected] of examples){
+    const got=describeCodesignFailure({status:1,stderr:privatePath+' '+identity+' '+diagnostic});
+    assert.match(got,new RegExp(expected));
+    assert.doesNotMatch(got,/someone@example|TEAM123456|\/Users\//);
+    assert.match(got,/exit status 1/);
+  }
+  assert.equal(describeCodesignFailure({status:1,stderr:'unknown underlying error'}),
+    'Unclassified signing failure; exit status 1');
+  assert.match(describeCodesignFailure({status:null,error:{code:'ETIMEDOUT'}}),/Signing command timed out/);
+});
+test('combined positive and negative signed-peer mode uses one signed bundle',()=>{
+  const runner=readFileSync(new URL(
+    '../examples/mcp-macos-xpc-signed-peers.mjs',import.meta.url),'utf8');
+  assert.match(runner,/mode==='both'\?\['signed-valid','wrong-worker'\]:\[mode\]/);
+  assert.match(runner,/for\(const check of checks\)/);
+  assert.match(runner,/assessSignedPeerExperiment\(check,observed\)/);
+  assert.match(runner,/if\(process\.argv\.length!==3/);
+  assert.match(runner,/args\.includes\('--sign'\)/);
+  assert.doesNotMatch(runner,/console\.log\(signingIdentity\)/);
+  assert.doesNotMatch(runner,/console\.log\(hostTeam\)/);
 });

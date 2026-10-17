@@ -122,3 +122,21 @@ Two separate tests are needed (one invocation each):
 `signed-valid` requires the host and worker (both developer-signed with the same local identity) to exchange the known bounded synthetic payload and receive its expected digest-verified worker receipt while both OS-level peer requirements are installed. `wrong-worker` uses a purposely different worker signing identifier in the **host's OS-installed requirement**, while the worker is still genuinely signed. The native host only passes if the OS returns **`XPC_ERROR_PEER_CODE_SIGNING_REQUIREMENT`**. A timeout, connection error, unsigned worker, wrong Team ID, missing gate API, or generic XPC error CANNOT count as a pass. The exact certificate hash/Team ID/private keys are never printed to the transcript.
 
 **Gate status: PENDING on-device acceptance.** CI compiles both macro-enabled variants on real macOS, but hosted CI has no local development signing identity and cannot claim a successful signed-peer connection. Even two successful tests would not prove denial of a separately signed *unauthorized inbound host* (that remains a separate negative test), nor tie Touch ID, reviewed payload bytes, actual file selections or durable revocation to XPC. Apple's expected certificate requirements are described at https://developer.apple.com/documentation/xpc/xpc_connection_set_peer_team_identity_requirement and https://developer.apple.com/documentation/xpc/xpc_peer_requirement_create_team_identity . Production `MCP_SANDBOX=required` remains fail-closed. No user documents, filesystem writes or production transfer permissions are enabled.
+
+## October 17, 2026 — positive signed peer accepted; separate negative blocked during Keychain signing
+
+On the real development Mac, `MCP_SANDBOX=off npm run mcp:mac-xpc-signed-peers -- signed-valid` **PASSED**: the Apple Development-signed native host and App Sandbox worker reported matching Team IDs and expected signing identifiers, and the OS-gated same-team connection exchanged the fixed digest-verified synthetic receipt. This is **on-device positive acceptance** of the isolated code-signing identity fixture, not approval of any document transfer.
+
+The separately invoked `-- wrong-worker` test **DID NOT COMPLETE**. It ended at `Apple Development worker signing failed; no signed XPC evidence was accepted.` The failure occurred before the host could run and before any OS peer-identity rejection was tested. This is neither a positive nor a negative XPC result; the underlying Keychain/codesign reason was previously suppressed by the harness. Do not record it as a successful unauthorized-peer denial.
+
+### Retry one signed bundle, retain strict OS rejection
+
+The native test harness now accepts `-- both` to compile and sign ONE nested development app/worker pair, verify signatures and entitlements once, then execute `signed-valid` followed by `wrong-worker` with the *same signed bundle*. This prevents the second Keychain signing operation from obscuring the negative OS check. Individual modes remain supported. Each native result still must exactly match its mode-specific status marker, and the negative result must come from Apple's specific `XPC_ERROR_PEER_CODE_SIGNING_REQUIREMENT`, not a timeout or generic transport failure.
+
+Run the single combined test after pulling this branch:
+
+    MCP_SANDBOX=off npm run mcp:mac-xpc-signed-peers -- both
+
+Any failure is fail-closed. On signing failures, output now contains only a classified Keychain/codesign reason and numeric exit status, not raw command output, personal directory paths, email, signing certificate fingerprint, Team ID or private-key material. An unknown error remains explicitly unclassified; do not guess the cause. If the combined test fails, report the sanitized output for triage. **The wrong-worker OS rejection acceptance gate remains pending** until a successful run prints both positive and specific wrong-identity denial passes.
+
+No real file contents, native picker, Touch ID grants, MCP endpoints or production XPC transfer are connected to this fixture. `MCP_SANDBOX=required` remains fail-closed.
