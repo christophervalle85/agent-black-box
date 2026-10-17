@@ -140,3 +140,19 @@ Run the single combined test after pulling this branch:
 Any failure is fail-closed. On signing failures, output now contains only a classified Keychain/codesign reason and numeric exit status, not raw command output, personal directory paths, email, signing certificate fingerprint, Team ID or private-key material. An unknown error remains explicitly unclassified; do not guess the cause. If the combined test fails, report the sanitized output for triage. **The wrong-worker OS rejection acceptance gate remains pending** until a successful run prints both positive and specific wrong-identity denial passes.
 
 No real file contents, native picker, Touch ID grants, MCP endpoints or production XPC transfer are connected to this fixture. `MCP_SANDBOX=required` remains fail-closed.
+
+## October 17, 2026 — combined Apple Development-signed XPC peer acceptance PASSED
+
+The operator ran the post-fix combined native fixture on a real development Mac:
+
+    MCP_SANDBOX=off npm run mcp:mac-xpc-signed-peers -- both
+
+**PASS (positive signed peer):** The disposable host and sandboxed XPC worker compiled, were signed using the same local Apple Development identity, had matching Team IDs and exact expected signing identifiers, and passed signature/entitlement verification. With OS-enforced same-team and exact-identifier requirements installed before XPC connection resume, the two processes exchanged a bounded synthetic payload and the worker returned the matching digest receipt.
+
+**PASS (incorrect outgoing worker identity):** In the SAME signed fixture invocation, the host installed a deliberately wrong expected worker identifier. The operating system returned its specific `XPC_ERROR_PEER_CODE_SIGNING_REQUIREMENT` rejection marker, which was strictly checked by the native host and Node harness. No generic timeout, unexpected XPC reply, code-signing failure, or missing OS gate is acceptable evidence for this case.
+
+**Result:** These two *real-Mac* signed-peer acceptance checks are complete (2/2). The earlier standalone `wrong-worker` Keychain-signing failure is retained above as historical triage; it did not test XPC rejection. Reusing one signed bundle prevented that separate second-signing failure from confounding the paired test.
+
+**Limitations:** This is still an isolated Apple Development-signed, synthetic-only experiment. It tests outbound worker-identity rejection with the trusted host's requirement; it does NOT independently demonstrate refusal of a separately signed unauthorized *incoming* host by the worker, nor prove a Developer ID production-distribution trust chain. No Touch ID proof is bound to XPC payload metadata, no selected file bytes flow into XPC, no real user-document operations or worker writes occur, and a valid digest/nonce is not an authorization grant. The synthetic test worker retains an in-memory replay cache only. `MCP_SANDBOX=required` remains fail-closed.
+
+**Next acceptance gate:** Sign a genuinely different, unauthorized development test host (with a different code-signing identifier) and demonstrate that the worker's inbound requirement rejects it *without delivering a handler response*, while a correctly identified host succeeds. Keep this separate from attaching operator approval to exact transfer bytes; do not enable production file transfer based on this receipt alone.
