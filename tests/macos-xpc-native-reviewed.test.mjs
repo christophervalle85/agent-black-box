@@ -234,7 +234,7 @@ test('native crash injection and reconciliation cannot produce a success receipt
   for(const requirement of [
     "mode==='handoff-rsa-crash-before'",
     "mode==='handoff-rsa-crash-after'",
-    'if(!uncertain||!nativeCrashVerified||callbackCount!==1)',
+    'if(!uncertain||!nativeCrashVerified||callbackCount!==1||',
     'classifyMacSyntheticUncertainReceipt(report',
     "ruleId!=='MAC_TRANSFER_DISPATCH_UNCERTAIN'",
     'if(callbackCount!==1)',
