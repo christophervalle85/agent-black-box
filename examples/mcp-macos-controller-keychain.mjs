@@ -17,6 +17,9 @@ import {
   parseMacKeychainPublicRecord,encodeMacKeychainUnsignedReview,
   validateMacKeychainSignedReview
 } from '../src/macos-controller-keychain.mjs';
+import {
+  enrollMacControllerPublicPin,assertMacControllerEnrolledPin
+} from '../src/macos-controller-pin.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const source=join(root,'native','macos','xpc','KeychainControllerSigner.m');
@@ -84,7 +87,10 @@ async function main(){
       console.log('PASS: Separate test controller RSA key enrolled in the macOS Keychain without emitting private bytes.');
     }
     const publicRecord=readMacKeychainControllerIdentity(helper);
-    console.log('PASS: Persistent enrolled RSA-2048 public key validated.');
+    if(mode==='provision')
+      enrollMacControllerPublicPin(publicRecord.sha256);
+    else assertMacControllerEnrolledPin(publicRecord.sha256);
+    console.log('PASS: Persistent enrolled RSA-2048 public key matches its separate local trust pin.');
     console.log('PUBLIC SHA256 (PKCS1 DER): '+publicRecord.sha256);
     console.log('NOTE: Software macOS Keychain and test helper, not Secure Enclave, a remote controller or production approval authority.');
   }finally{rmSync(temp,{recursive:true,force:true});}
