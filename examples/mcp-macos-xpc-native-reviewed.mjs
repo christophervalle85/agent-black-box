@@ -9,6 +9,11 @@ import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {homedir,tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {
+  buildSignedMacKeychainControllerHelper,
+  readMacKeychainControllerIdentity,
+  signMacKeychainReviewedTransaction
+} from './mcp-macos-controller-keychain.mjs';
 import {AuditStore} from '../src/audit.mjs';
 import {createMacTransferIntent} from '../src/macos-transfer-intent.mjs';
 import {createAuditedMacTransferController} from '../src/macos-transfer-controller.mjs';
@@ -88,13 +93,16 @@ function verifyWorkerSandbox(worker){
  * production-ready authorization channel or a bearer-ticket design.
  */
 async function auditedHandoff(host,dir,{
-  privateKey=null,durable=false,restart=false,crashPhase=null
+  privateKey=null,signController=null,
+  durable=false,restart=false,crashPhase=null
 }={}){
   if(restart&&!durable)throw Error('Worker restart requires durable replay mode.');
   if(crashPhase!==null&&(!durable||
      !['before','after'].includes(crashPhase)))
     throw Error('Synthetic crash requires signed durable replay mode.');
-  const rsa=privateKey!==null;
+  if(privateKey!==null&&signController!==null)
+    throw Error('Only one native controller signing identity is permitted.');
+  const rsa=privateKey!==null||typeof signController==='function';
   if(durable&&!rsa)throw Error('Durable native replay requires signed controller data.');
   const approveMode=crashPhase?'handoff-rsa-crash-'+crashPhase:
     durable?'handoff-rsa-durable-approved':
@@ -117,9 +125,11 @@ async function auditedHandoff(host,dir,{
       const last=store.list({limit:1})[0];
       if(last?.ruleId!=='MAC_TRANSFER_DISPATCH_RESERVED' ||
          last.approvalId!==context.reviewId)return undefined;
-      const wire=rsa?encodeMacReviewedRsaHandoff(context.transaction,{
-        privateKey,reservationMac:store.verify().head
-      }):encodeCanonicalMacReviewedHandoff(context.transaction);
+      const wire=signController?
+        signController(context.transaction,store.verify().head):
+        rsa?encodeMacReviewedRsaHandoff(context.transaction,{
+          privateKey,reservationMac:store.verify().head
+        }):encodeCanonicalMacReviewedHandoff(context.transaction);
       if(durable)signedCommittedWire=Buffer.from(wire);
       const observed=spawnSync(host,[approveMode],{
         input:wire,encoding:'utf8',timeout:28000,maxBuffer:1024,
@@ -145,9 +155,11 @@ async function auditedHandoff(host,dir,{
   });
   const review=controller.host.request(intent);
   const transaction=createCanonicalMacReviewedTransaction(review,{now});
-  const valid=rsa?encodeMacReviewedRsaHandoff(transaction,{
-    privateKey,reservationMac:store.verify().head,now
-  }):encodeCanonicalMacReviewedHandoff(transaction,{now});
+  const valid=signController?
+    signController(transaction,store.verify().head):
+    rsa?encodeMacReviewedRsaHandoff(transaction,{
+      privateKey,reservationMac:store.verify().head,now
+    }):encodeCanonicalMacReviewedHandoff(transaction,{now});
 
   // Negative cases originate from the local harness, NOT the agent.
   // Reject before HMAC approval, Touch ID or signed XPC dispatch.
@@ -297,6 +309,7 @@ async function auditedHandoff(host,dir,{
     }
   }
   console.log('PASS: Single HMAC-audited synthetic reservation launched one signed native Touch ID/XPC transaction; consumed review could not be replayed.');
+  if(signController)console.log('PASS: Pre-enrolled macOS Keychain RSA controller identity signed the exact synthetic audited handoff; no private key bytes reached Node.');
   console.log(restart?
     'NOTE: Controlled worker exit and relaunch tested with fixed synthetic bytes. Production controller identity, trusted UI and actual import/export remain disabled.':
     durable?
@@ -315,8 +328,8 @@ async function main(){
      (!['all','handoff','handoff-rsa','handoff-rsa-durable',
         'handoff-rsa-durable-restart',
         'handoff-rsa-crash-before','handoff-rsa-crash-after',
-        'approved','cancel','expired'].includes(mode)))
-    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, handoff-rsa-crash-before, handoff-rsa-crash-after, approved, cancel or expired.');
+        'handoff-rsa-keychain','approved','cancel','expired'].includes(mode)))
+    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, handoff-rsa-crash-before, handoff-rsa-crash-after, handoff-rsa-keychain, approved, cancel or expired.');
   const identity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Apple Development certificate discovery').stdout);
@@ -326,8 +339,23 @@ async function main(){
       mode==='handoff-rsa-crash-after'?'after':null;
     const restart=mode==='handoff-rsa-durable-restart';
     const durable=mode==='handoff-rsa-durable'||restart||crashPhase!==null;
-    const rsa=mode==='handoff-rsa'||durable;
-    const signer=rsa?createEphemeralMacControllerSigner():null;
+    const keychain=mode==='handoff-rsa-keychain';
+    const rsa=mode==='handoff-rsa'||durable||keychain;
+    const signer=rsa&&!keychain?createEphemeralMacControllerSigner():null;
+    let signController=null;
+    if(keychain){
+      // Does not enroll a new key: absence of a provisioned identity is fatal.
+      const helper=buildSignedMacKeychainControllerHelper(temp,identity);
+      const enrolled=readMacKeychainControllerIdentity(helper);
+      writeFileSync(join(temp,'BBXTestPinnedControllerKey.h'),
+        formatPinnedMacRsaPublicHeader(enrolled.publicKey),
+        {mode:0o600,flag:'wx'});
+      signController=(transaction,reservationMac)=>
+        signMacKeychainReviewedTransaction(helper,transaction,{
+          publicKey:enrolled.publicKey,reservationMac
+        });
+      console.log('PASS: Existing controller Keychain public identity pinned before the native host is code signed. SHA256: '+enrolled.sha256);
+    }
     if(signer)writeFileSync(join(temp,'BBXTestPinnedControllerKey.h'),
       formatPinnedMacRsaPublicHeader(signer.publicKey),{mode:0o600,flag:'wx'});
     const app=join(temp,'BlackBoxTransferReceiptHost.app');
@@ -374,9 +402,10 @@ async function main(){
       throw Error('Signing Team ID mismatch; native review denied.');
     verifyWorkerSandbox(service);
     console.log('PASS: Apple Development-signed native Touch ID host and sandboxed XPC worker verified with matching Team IDs.');
-    if(mode==='handoff'||mode==='handoff-rsa'||durable){
+    if(mode==='handoff'||mode==='handoff-rsa'||durable||keychain){
       await auditedHandoff(host,temp,{
-        privateKey:signer?.privateKey??null,durable,restart,crashPhase
+        privateKey:signer?.privateKey??null,signController,
+        durable,restart,crashPhase
       });
       return;
     }
