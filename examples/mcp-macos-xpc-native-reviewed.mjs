@@ -133,7 +133,8 @@ async function auditedHandoff(host,dir,{
       if(last?.ruleId!=='MAC_TRANSFER_DISPATCH_RESERVED' ||
          last.approvalId!==context.reviewId)return undefined;
       const wire=signController?
-        signController(context.transaction,store.verify().head):
+        signController(context.transaction,store.verify().head,
+                       dirname(store.filename)):
         rsa?encodeMacReviewedRsaHandoff(context.transaction,{
           privateKey,reservationMac:store.verify().head
         }):encodeCanonicalMacReviewedHandoff(context.transaction);
@@ -141,7 +142,8 @@ async function auditedHandoff(host,dir,{
         // The second native helper MUST exit with the exact spent-nonce
         // status, never with a generic failure or another signature.
         signerReplayDenied=signController.verifyReplay(
-          context.transaction,store.verify().head);
+          context.transaction,store.verify().head,
+          dirname(store.filename));
       }
       if(denyController){
         // An actual signature after the operator was instructed to cancel
@@ -440,13 +442,13 @@ async function main(){
       writeFileSync(join(temp,'BBXTestPinnedControllerKey.h'),
         formatPinnedMacRsaPublicHeader(enrolled.publicKey),
         {mode:0o600,flag:'wx'});
-      signController=(transaction,reservationMac)=>
+      signController=(transaction,reservationMac,auditDirectory)=>
         signMacKeychainReviewedTransaction(helper,transaction,{
-          publicKey:enrolled.publicKey,reservationMac
+          publicKey:enrolled.publicKey,reservationMac,auditDirectory
         });
-      signController.verifyReplay=(transaction,reservationMac)=>
+      signController.verifyReplay=(transaction,reservationMac,auditDirectory)=>
         assertMacKeychainSignerReplayDenied(helper,transaction,{
-          reservationMac
+          reservationMac,auditDirectory
         });
       console.log('PASS: Existing controller Keychain public identity pinned before the native host is code signed. SHA256: '+enrolled.sha256);
     }
