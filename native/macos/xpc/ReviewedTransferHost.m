@@ -263,10 +263,16 @@ static bool statusIs(xpc_connection_t peer,const NativeReview *review,
 }
 int main(int argc,const char *argv[]){
 #ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
-    /* A signed-authorization test binary must never expose the old unsigned
-       handoff or standalone approval modes, even under direct invocation. */
+    /* Distinct allowlists prevent invoking legacy / no-auth modes on the
+       signed-authority builds, including the persistent replay diagnostic. */
+#ifdef BBX_TEST_DURABLE_REPLAY
+    if(argc!=2 || (strcmp(argv[1],"handoff-rsa-durable-approved")!=0 &&
+                   strcmp(argv[1],"handoff-rsa-durable-invalid")!=0 &&
+                   strcmp(argv[1],"handoff-rsa-durable-replay")!=0)){
+#else
     if(argc!=2 || (strcmp(argv[1],"handoff-rsa-approved")!=0 &&
                    strcmp(argv[1],"handoff-rsa-invalid")!=0)){
+#endif
 #else
     if(argc!=2 || (strcmp(argv[1],"approved")!=0 &&
                    strcmp(argv[1],"cancel")!=0 &&
@@ -288,7 +294,11 @@ int main(int argc,const char *argv[]){
         // embedded before signing the diagnostic native app, not in stdin.
 #ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
         const bool valid=importSignedPreissuedReview(&review);
+#ifdef BBX_TEST_DURABLE_REPLAY
+        const bool negative=strcmp(argv[1],"handoff-rsa-durable-invalid")==0;
+#else
         const bool negative=strcmp(argv[1],"handoff-rsa-invalid")==0;
+#endif
 #else
         const bool valid=importPreissuedReview(&review);
         const bool negative=strcmp(argv[1],"handoff-invalid")==0;
@@ -327,6 +337,29 @@ int main(int argc,const char *argv[]){
         return 0;
     }
     const NativeReview committed=review; // Immutable local pre-auth snapshot.
+#ifdef BBX_TEST_DURABLE_REPLAY
+    /*
+     * NEGATIVE-ONLY diagnostic: a second independently launched native
+     * host submits the identical SIGNED transaction without another biometric
+     * prompt, and passes ONLY if the worker returns REPLAY. This can never
+     * produce a success/transfer receipt; on unexpected ACCEPTED it fails.
+     */
+    if(strcmp(argv[1],"handoff-rsa-durable-replay")==0){
+        if(!reviewIsExact(&review))return 87;
+        xpc_connection_t replayPeer=openWorker();
+        if(!replayPeer)return 85;
+        const bool denied=statusIs(replayPeer,&review,fixture,
+                                   sizeof(fixture)-1,"REPLAY",NULL);
+        xpc_connection_cancel(replayPeer);
+        xpc_release(replayPeer);
+        if(!denied){
+            puts("BBX_REVIEWED_XPC_DURABLE_REPLAY_NOT_DENIED");
+            return 87;
+        }
+        puts("BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED");
+        return 0;
+    }
+#endif
     const int auth=authenticateReview(&review);
     // Touch ID can approve only the exact review metadata it was shown.
     // Fail closed if nonce, ID, expiry, size or digest changed in memory.
@@ -386,6 +419,12 @@ int main(int argc,const char *argv[]){
 #ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
     if(strcmp(argv[1],"handoff-approved")==0){
         puts("BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED");
+        return 0;
+    }
+#endif
+#ifdef BBX_TEST_DURABLE_REPLAY
+    if(strcmp(argv[1],"handoff-rsa-durable-approved")==0){
+        puts("BBX_REVIEWED_XPC_RSA_DURABLE_TOUCHID_ACCEPTED");
         return 0;
     }
 #endif
