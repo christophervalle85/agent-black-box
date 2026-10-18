@@ -139,8 +139,20 @@ jobs:
           "$out/ReviewedDurableReplayVector" loose-dir "$replay"
           chmod 700 "$replay"
           xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_DURABLE_REPLAY=1 -o "$out/ReviewedDurableWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
+          xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -DBBX_TEST_DURABLE_REPLAY=1 -o "$out/ReviewedDurableSignedHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
+          for old_mode in handoff-approved handoff-rsa-approved approved cancel expired; do
+            set +e
+            response=$("$out/ReviewedDurableSignedHost" "$old_mode")
+            code=$?
+            set -e
+            if [ "$code" -ne 90 ] || [ "$response" != "BBX_REVIEWED_XPC_BAD_ARGS" ]; then
+              echo "ERROR: Durable RSA host exposed an unsigned or non-durable entry point."
+              exit 1
+            fi
+          done
+          echo "PASS: Durable RSA native host compiled and old unsigned modes remain disabled."
           echo "PASS: Durable native nonce replays denied across distinct processes, changed transaction IDs and unsafe directory permissions."
-          echo "PASS: Nineteen native fixture executables compiled with Apple's SDK; durable worker GUI/XPC execution requires real-Mac acceptance."
+          echo "PASS: Twenty native fixture executables compiled with Apple's SDK; durable worker GUI/XPC execution requires real-Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
