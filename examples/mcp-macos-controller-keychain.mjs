@@ -4,8 +4,9 @@
  * this program. Compiled and Apple Development-signed helper is distinct
  * from the Touch ID/XPC reviewed-host binary.
  *
- * Software Keychain storage and same-user helper invocation are not
- * hardware-backed authorization or independent trusted consent.
+ * Signing also requires fresh in-helper Touch ID consent; the Keychain
+ * credential remains a software test key, not an ACL-bound independent
+ * authorization service or production-trusted controller.
  */
 import {spawnSync} from 'node:child_process';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -42,7 +43,8 @@ export function buildSignedMacKeychainControllerHelper(temp,identity){
   const helper=join(temp,'BBXTestControllerKeychain');
   mustRun('/usr/bin/xcrun',['clang','-std=c11','-fno-objc-arc','-O2',
     '-Wall','-Wextra','-Werror=implicit-function-declaration','-o',helper,
-    source,'-framework','Foundation','-framework','Security'],
+    source,'-framework','Foundation','-framework','Security',
+    '-framework','LocalAuthentication'],
   'Keychain test helper compile');
   mustRun('/usr/bin/codesign',['--force','--sign',identity,'--options','runtime',
     '--identifier','dev.agentblackbox.test.controller-keychain',helper],
@@ -59,9 +61,9 @@ export function signMacKeychainReviewedTransaction(helper,tx,{
   publicKey,reservationMac,now=Date.now()
 }={}){
   const unsigned=encodeMacKeychainUnsignedReview(tx,{reservationMac,now});
-  const result=invoke(helper,['sign'],{input:unsigned,timeout:15000});
+  const result=invoke(helper,['sign'],{input:unsigned,timeout:50000});
   if(result.error||result.signal||result.status!==0)
-    throw Error('Persistent controller Keychain refused the signed review.');
+    throw Error('Persistent controller did not obtain Touch ID consent or refused the signed review.');
   return validateMacKeychainSignedReview(result.stdout,{
     publicKey,transaction:tx,reservationMac,now
   });
