@@ -13,6 +13,34 @@ int main(int argc,char **argv){
     /* Both IDs are valid lowercase 64-digit hex. */
     BBXReplayDecision expected;
     BBXReplayDecision observed;
+    if(strcmp(argv[1],"observe-empty")==0 ||
+       strcmp(argv[1],"observe-spent")==0 ||
+       strcmp(argv[1],"observe-foreign")==0 ||
+       strcmp(argv[1],"observe-bad-id")==0 ||
+       strcmp(argv[1],"observe-loose-dir")==0 ||
+       strcmp(argv[1],"observe-symlink")==0 ||
+       strcmp(argv[1],"observe-corrupt")==0){
+        const bool empty=strcmp(argv[1],"observe-empty")==0;
+        const bool foreign=strcmp(argv[1],"observe-foreign")==0;
+        const bool bad=strcmp(argv[1],"observe-bad-id")==0;
+        const bool loose=strcmp(argv[1],"observe-loose-dir")==0;
+        const bool symlink=strcmp(argv[1],"observe-symlink")==0;
+        const bool corrupt=strcmp(argv[1],"observe-corrupt")==0;
+        const BBXReplayObservation want=empty?
+            BBX_REPLAY_NO_MARKER:
+            foreign||bad||loose||symlink||corrupt?
+            BBX_REPLAY_UNVERIFIABLE:BBX_REPLAY_MATCHING_MARKER;
+        const BBXReplayObservation found=bbx_reviewed_replay_observe(
+            dir,symlink?"00000000-0000-4000-8000-000000000000":nonce,
+            bad?"invalid":
+            foreign?"ffffffffffffffffffffffffffffffff"
+                    "ffffffffffffffffffffffffffffffff":id);
+        if(close(dir)!=0||found!=want)return 87;
+        puts(found==BBX_REPLAY_NO_MARKER?"BBX_OBSERVE_NO_MARKER":
+             found==BBX_REPLAY_MATCHING_MARKER?"BBX_OBSERVE_MATCHING_MARKER":
+             "BBX_OBSERVE_UNVERIFIABLE");
+        return 0;
+    }
     if(strcmp(argv[1],"fresh")==0){
         expected=BBX_REPLAY_FRESH_COMMITTED;
         observed=bbx_reviewed_replay_reserve(dir,nonce,id);
