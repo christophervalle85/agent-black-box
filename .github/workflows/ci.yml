@@ -83,7 +83,14 @@ jobs:
             exit 1
           fi
           echo "PASS: Native C and Node derive identical canonical reviewed transaction IDs from a fixed synthetic test vector."
-          echo "PASS: Thirteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
+          xcrun clang "${flags[@]}" -o "$out/ReviewedHandoffVector" native/macos/xpc/ReviewedHandoffVector.c
+          node examples/mcp-macos-reviewed-contract-vector.mjs --handoff > "$out/review-wire.txt"
+          "$out/ReviewedHandoffVector" valid < "$out/review-wire.txt"
+          sed 's/^version=1$/version=2/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^noteName=bbx-test-reviewed.txt$/noteName=bbx-test-other.txt/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^transactionId=./transactionId=f/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          echo "PASS: Native handoff envelope parser accepts only exact preissued synthetic reviewed data."
+          echo "PASS: Fourteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:

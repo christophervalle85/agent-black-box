@@ -5,7 +5,9 @@
 import {createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {createCanonicalMacReviewedTransaction} from '../src/macos-reviewed-transaction.mjs';
+import {
+  createCanonicalMacReviewedTransaction,encodeCanonicalMacReviewedHandoff
+} from '../src/macos-reviewed-transaction.mjs';
 
 export const FIXED_BYTES=Buffer.from('BBX synthetic Touch ID reviewed bytes.\n');
 export const FIXED_REVIEW_ID='123e4567-e89b-42d3-a456-426614174000';
@@ -24,6 +26,10 @@ export function fixedMacReviewedVector(){
   },{now:FIXED_ISSUED});
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  if(process.argv.length!==2)process.exitCode=90;
-  else console.log(fixedMacReviewedVector().transactionId);
+  if(process.argv.length===2)console.log(fixedMacReviewedVector().transactionId);
+  else if(process.argv.length===3 && process.argv[2]==='--handoff')
+    process.stdout.write(encodeCanonicalMacReviewedHandoff(
+      fixedMacReviewedVector(),{now:FIXED_ISSUED}
+    ));
+  else process.exitCode=90;
 }
