@@ -124,8 +124,8 @@ static bool approveExactlyReviewedSyntheticTransaction(
     }
     NSString *reason=[NSString stringWithFormat:
         @"Agent Black Box TEST controller: approve import of "
-         "bbx-test-reviewed.txt (%llu bytes), SHA-256 %.16s..., "
-         "transaction %.12s... Only synthetic data.",
+         @"bbx-test-reviewed.txt (%llu bytes), SHA-256 %.16s..., "
+         @"transaction %.12s... Only synthetic data.",
         (unsigned long long)review->byteLength,
         review->sha256,review->transactionId];
     dispatch_semaphore_t completed=dispatch_semaphore_create(0);
@@ -140,9 +140,8 @@ static bool approveExactlyReviewedSyntheticTransaction(
         dispatch_time(DISPATCH_TIME_NOW,40LL*NSEC_PER_SEC));
     [context invalidate];
     [context release];
-#if !OS_OBJECT_USE_OBJC
-    dispatch_release(completed);
-#endif
+    /* The callback may still arrive after timeout; keep the diagnostic
+       semaphore valid until this short-lived helper process exits. */
     return timeout==0&&approved;
 }
 
