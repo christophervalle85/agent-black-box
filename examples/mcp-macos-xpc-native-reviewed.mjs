@@ -14,6 +14,7 @@ import {
   readMacKeychainControllerIdentity,
   signMacKeychainReviewedTransaction
 } from './mcp-macos-controller-keychain.mjs';
+import {assertMacControllerEnrolledPin} from '../src/macos-controller-pin.mjs';
 import {AuditStore} from '../src/audit.mjs';
 import {createMacTransferIntent} from '../src/macos-transfer-intent.mjs';
 import {createAuditedMacTransferController} from '../src/macos-transfer-controller.mjs';
@@ -347,6 +348,9 @@ async function main(){
       // Does not enroll a new key: absence of a provisioned identity is fatal.
       const helper=buildSignedMacKeychainControllerHelper(temp,identity);
       const enrolled=readMacKeychainControllerIdentity(helper);
+      // Trust pin is independently enrolled, NOT accepted from the live
+      // Keychain public-key response. No automatic pin replacement.
+      assertMacControllerEnrolledPin(enrolled.sha256);
       writeFileSync(join(temp,'BBXTestPinnedControllerKey.h'),
         formatPinnedMacRsaPublicHeader(enrolled.publicKey),
         {mode:0o600,flag:'wx'});
