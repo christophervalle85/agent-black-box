@@ -26,6 +26,15 @@
 #ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
 #include "ReviewedTransactionSignedAuthority.h"
 #endif
+#ifdef BBX_TEST_DURABLE_WORKER_RESTART
+#if !defined(BBX_TEST_DURABLE_REPLAY) || !defined(BBX_TEST_RSA_CONTROLLER_HANDOFF)
+#error "Worker restart requires the RSA-signed durable test host."
+#endif
+#include <errno.h>
+#include <signal.h>
+#include <unistd.h>
+#include <limits.h>
+#endif
 
 static const unsigned char fixture[]="BBX synthetic Touch ID reviewed bytes.\n";
 static const char target[]="bbx-test-reviewed.txt";
@@ -261,6 +270,108 @@ static bool statusIs(xpc_connection_t peer,const NativeReview *review,
     xpc_release(reply);
     return okay;
 }
+#ifdef BBX_TEST_DURABLE_WORKER_RESTART
+typedef struct {
+    uint64_t pid;
+    char instance[33];
+} BBXTestWorkerInstance;
+
+/* Strict exact three-field reply; all evidence comes from the OS-verified
+ * signed XPC worker, not argv, a PID file or agent-controlled metadata. */
+static bool bbx_test_worker_command(xpc_connection_t peer,
+    const char *method,const char *expected,BBXTestWorkerInstance *out){
+    if(!peer||!method||!expected||!out)return false;
+    xpc_object_t request=xpc_dictionary_create(NULL,NULL,0);
+    if(!request)return false;
+    xpc_dictionary_set_string(request,"method",method);
+    xpc_object_t reply=xpc_connection_send_message_with_reply_sync(peer,request);
+    xpc_release(request);
+    if(!reply)return false;
+    __block unsigned count=0;
+    __block bool exact=true;
+    if(xpc_get_type(reply)==XPC_TYPE_DICTIONARY)
+        xpc_dictionary_apply(reply,^bool(const char *key,xpc_object_t value){
+            count++;
+            const xpc_type_t type=xpc_get_type(value);
+            if(!((strcmp(key,"status")==0&&type==XPC_TYPE_STRING)||
+                 (strcmp(key,"workerPid")==0&&type==XPC_TYPE_UINT64)||
+                 (strcmp(key,"workerInstance")==0&&type==XPC_TYPE_STRING)))
+                exact=false;
+            return true;
+        });
+    else exact=false;
+    const char *status=exact&&count==3?
+        xpc_dictionary_get_string(reply,"status"):NULL;
+    const char *instance=exact&&count==3?
+        xpc_dictionary_get_string(reply,"workerInstance"):NULL;
+    const uint64_t pid=exact&&count==3?
+        xpc_dictionary_get_uint64(reply,"workerPid"):0;
+    const bool valid=status&&strcmp(status,expected)==0 &&
+        instance&&bbx_reviewed_lowerhex(instance,32) &&
+        pid>1 && pid<INT_MAX;
+    if(valid){
+        out->pid=pid;
+        memcpy(out->instance,instance,sizeof(out->instance));
+    }
+    xpc_release(reply);
+    return valid;
+}
+/*
+ * A deliberate process termination must actually occur: a new XPC
+ * connection with a different PID is insufficient by itself, because
+ * launchd could create multiple service processes. Verify ESRCH on the
+ * original worker PID before reconnecting.
+ */
+static bool bbx_test_force_restart_and_reject(const NativeReview *review){
+    if(!reviewIsExact(review))return false;
+    xpc_connection_t first=openWorker();
+    if(!first)return false;
+    BBXTestWorkerInstance before={0},exitAck={0};
+    const bool began=bbx_test_worker_command(first,"bbx_test_worker_identity",
+                                              "READY",&before);
+    const bool requested=began&&bbx_test_worker_command(
+        first,"bbx_test_worker_exit","EXITING",&exitAck);
+    xpc_connection_cancel(first);
+    xpc_release(first);
+    if(!requested||before.pid!=exitAck.pid||
+       strcmp(before.instance,exitAck.instance)!=0)return false;
+
+    bool oldGone=false;
+    for(unsigned attempt=0;attempt<60;attempt++){
+        errno=0;
+        if(kill((pid_t)before.pid,0)==-1&&errno==ESRCH){
+            oldGone=true;
+            break;
+        }
+        usleep(100000);
+    }
+    if(!oldGone)return false;
+
+    /* The new worker must show a fresh OS PID AND per-process random token.
+     * It then revalidates the same signed transaction and must report REPLAY
+     * using its sandbox-owned durable marker, without running Touch ID again. */
+    for(unsigned attempt=0;attempt<8;attempt++){
+        xpc_connection_t fresh=openWorker();
+        if(!fresh)return false;
+        BBXTestWorkerInstance after={0};
+        const bool ready=bbx_test_worker_command(
+            fresh,"bbx_test_worker_identity","READY",&after);
+        const bool distinct=ready && after.pid!=before.pid &&
+            strcmp(after.instance,before.instance)!=0;
+        const bool denied=distinct&&statusIs(fresh,review,fixture,
+            sizeof(fixture)-1,"REPLAY",NULL);
+        xpc_connection_cancel(fresh);
+        xpc_release(fresh);
+        if(denied)return true;
+        /* A different worker that returned ACCEPTED is a hard failure;
+         * retry loops cannot turn a replay failure into acceptance. */
+        if(ready)return false;
+        usleep(150000);
+    }
+    return false;
+}
+#endif
+
 int main(int argc,const char *argv[]){
 #ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
     /* Distinct allowlists prevent invoking legacy / no-auth modes on the
@@ -268,7 +379,11 @@ int main(int argc,const char *argv[]){
 #ifdef BBX_TEST_DURABLE_REPLAY
     if(argc!=2 || (strcmp(argv[1],"handoff-rsa-durable-approved")!=0 &&
                    strcmp(argv[1],"handoff-rsa-durable-invalid")!=0 &&
-                   strcmp(argv[1],"handoff-rsa-durable-replay")!=0)){
+                   strcmp(argv[1],"handoff-rsa-durable-replay")!=0
+#ifdef BBX_TEST_DURABLE_WORKER_RESTART
+                   && strcmp(argv[1],"handoff-rsa-durable-restart")!=0
+#endif
+                   )){
 #else
     if(argc!=2 || (strcmp(argv[1],"handoff-rsa-approved")!=0 &&
                    strcmp(argv[1],"handoff-rsa-invalid")!=0)){
@@ -339,6 +454,16 @@ int main(int argc,const char *argv[]){
         return 0;
     }
     const NativeReview committed=review; // Immutable local pre-auth snapshot.
+#ifdef BBX_TEST_DURABLE_WORKER_RESTART
+    if(strcmp(argv[1],"handoff-rsa-durable-restart")==0){
+        if(!bbx_test_force_restart_and_reject(&review)){
+            puts("BBX_REVIEWED_XPC_WORKER_RESTART_NOT_PROVEN");
+            return 87;
+        }
+        puts("BBX_REVIEWED_XPC_WORKER_RESTART_REPLAY_DENIED");
+        return 0;
+    }
+#endif
 #ifdef BBX_TEST_DURABLE_REPLAY
     /*
      * NEGATIVE-ONLY diagnostic: a second independently launched native
