@@ -496,11 +496,17 @@ int main(int argc,const char *argv[]){
     /* Distinct allowlists prevent invoking legacy / no-auth modes on the
        signed-authority builds, including the persistent replay diagnostic. */
 #ifdef BBX_TEST_CRASH_RECONCILE
-    /* A crash-only host has no positive receipt entry point other than the
-       two Touch ID-gated synthetic fault modes. */
+    /* Crash-only builds remain restricted. The combined Keychain test
+       explicitly opts into replay/restart controls for its full suite. */
     if(argc!=2 || (strcmp(argv[1],"handoff-rsa-durable-invalid")!=0 &&
                    strcmp(argv[1],"handoff-rsa-crash-before")!=0 &&
-                   strcmp(argv[1],"handoff-rsa-crash-after")!=0)){
+                   strcmp(argv[1],"handoff-rsa-crash-after")!=0
+#ifdef BBX_TEST_KEYCHAIN_FULL_SUITE
+                   && strcmp(argv[1],"handoff-rsa-durable-approved")!=0
+                   && strcmp(argv[1],"handoff-rsa-durable-replay")!=0
+                   && strcmp(argv[1],"handoff-rsa-durable-restart")!=0
+#endif
+                   )){
 #elif defined(BBX_TEST_DURABLE_REPLAY)
     if(argc!=2 || (strcmp(argv[1],"handoff-rsa-durable-approved")!=0 &&
                    strcmp(argv[1],"handoff-rsa-durable-invalid")!=0 &&
