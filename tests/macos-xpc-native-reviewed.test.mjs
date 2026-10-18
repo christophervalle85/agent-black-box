@@ -10,7 +10,10 @@ const marker={
   'handoff-invalid':'BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC\n',
   'handoff-approved':'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED\n',
   'handoff-rsa-invalid':'BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
-  'handoff-rsa-approved':'BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED\n'
+  'handoff-rsa-approved':'BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED\n',
+  'handoff-rsa-durable-invalid':'BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
+  'handoff-rsa-durable-approved':'BBX_REVIEWED_XPC_RSA_DURABLE_TOUCHID_ACCEPTED\n',
+  'handoff-rsa-durable-replay':'BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED\n'
 };
 const good=mode=>({stdout:marker[mode],stderr:'',status:0,
   signal:null,error:null});
@@ -95,9 +98,10 @@ test('native host owns authentication and worker validates exact reviewed receip
   assert.ok(runner.includes('createAuditedMacTransferController'));
   assert.ok(runner.includes('MAC_TRANSFER_DISPATCH_RESERVED'));
   assert.ok(runner.includes('SYNTHETIC_ACCEPTED'));
-  assert.ok(runner.includes("const approveMode=rsa?'handoff-rsa-approved':'handoff-approved'"));
-  assert.ok(runner.includes("const invalidMode=rsa?'handoff-rsa-invalid':'handoff-invalid'"));
-  assert.ok(runner.includes('await auditedHandoff(host,temp,{privateKey:signer?.privateKey??null})'));
+  assert.ok(runner.includes("const approveMode=durable?'handoff-rsa-durable-approved':"));
+  assert.ok(runner.includes("const invalidMode=durable?'handoff-rsa-durable-invalid':"));
+  assert.ok(runner.includes('await auditedHandoff(host,temp,{'));
+  assert.ok(runner.includes('privateKey:signer?.privateKey??null,durable'));
   assert.ok(runner.includes("'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED"));
   assert.ok(host.includes('#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF'));
   assert.ok(host.includes('bbx_read_preissued_review(stdin,&preissued)'));
@@ -110,5 +114,13 @@ test('native host owns authentication and worker validates exact reviewed receip
     host.indexOf('const int auth=authenticateReview(&review);'));
   assert.ok(runner.includes('formatPinnedMacRsaPublicHeader(signer.publicKey)'));
   assert.ok(runner.includes('reservationMac:store.verify().head'));
-  assert.ok(runner.includes("mode==='handoff-rsa'"));
+  assert.ok(runner.includes("mode==='handoff-rsa'||durable"));
+  assert.ok(runner.includes("const durable=mode==='handoff-rsa-durable'"));
+  assert.ok(runner.includes('signedCommittedWire=Buffer.from(wire)'));
+  assert.ok(runner.includes("['handoff-rsa-durable-replay']"));
+  assert.ok(runner.includes("assessNativeReviewedXpc('handoff-rsa-durable-replay',replay)"));
+  assert.ok(host.includes('BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED'));
+  assert.ok(host.includes('"REPLAY",NULL)'));
+  assert.ok(worker.includes('BBX_TEST_DURABLE_REPLAY'));
+  assert.ok(worker.includes('bbx_reviewed_replay_reserve('));
 });
