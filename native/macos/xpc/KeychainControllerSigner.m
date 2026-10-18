@@ -175,6 +175,14 @@ static int signFixedSyntheticReview(void){
     BBXPreissuedReview review={0};
     if(!bbx_parse_preissued_review(canonical,canonicalLength,&review))
         return 87;
+    /* Local native signing policy is narrower than the generic reviewed
+       contract: only the known 39-byte synthetic fixture may be authorized.
+       Neither caller-controlled note bytes nor real files can be signed. */
+    static const char expectedSyntheticSHA[]=
+        "661a096ac3bcad82021fdc5db4aff8358cc011409053809e9ebd19b0b81d6be3";
+    if(review.byteLength!=39||
+       strcmp(review.sha256,expectedSyntheticSHA)!=0)
+        return 87;
     struct timespec clockValue={0};
     if(clock_gettime(CLOCK_REALTIME,&clockValue)!=0 ||
        clockValue.tv_sec<0)return 87;
