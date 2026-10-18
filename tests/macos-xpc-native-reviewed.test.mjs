@@ -104,7 +104,8 @@ test('native host owns authentication and worker validates exact reviewed receip
   assert.ok(runner.includes("const approveMode=crashPhase?'handoff-rsa-crash-'+crashPhase:"));
   assert.ok(runner.includes("const invalidMode=durable?'handoff-rsa-durable-invalid':"));
   assert.ok(runner.includes('await auditedHandoff(host,temp,{'));
-  assert.ok(runner.includes('privateKey:signer?.privateKey??null,durable'));
+  assert.ok(runner.includes('privateKey:signer?.privateKey??null,signController,'));
+  assert.ok(runner.includes('durable,restart,crashPhase'));
   assert.ok(runner.includes("'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED"));
   assert.ok(host.includes('#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF'));
   assert.ok(host.includes('bbx_read_preissued_review(stdin,&preissued)'));
