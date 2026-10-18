@@ -46,6 +46,9 @@ jobs:
       - run: node --check src/macos-transfer-intent.mjs
       - run: node --check src/macos-transfer-review.mjs
       - run: node --check src/macos-transfer-controller.mjs
+      - run: node --check src/macos-controller-keychain.mjs
+      - run: node --check src/macos-controller-pin.mjs
+      - run: node --check examples/mcp-macos-controller-keychain.mjs
   macos-native-compile:
     # Run a real Apple SDK compile, NOT a GUI authentication/file-picker test.
     runs-on: macos-15
