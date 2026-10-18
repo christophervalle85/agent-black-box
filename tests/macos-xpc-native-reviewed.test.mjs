@@ -101,7 +101,7 @@ test('native host owns authentication and worker validates exact reviewed receip
   assert.ok(runner.includes('createAuditedMacTransferController'));
   assert.ok(runner.includes('MAC_TRANSFER_DISPATCH_RESERVED'));
   assert.ok(runner.includes('SYNTHETIC_ACCEPTED'));
-  assert.ok(runner.includes("const approveMode=durable?'handoff-rsa-durable-approved':"));
+  assert.ok(runner.includes("const approveMode=crashPhase?'handoff-rsa-crash-'+crashPhase:"));
   assert.ok(runner.includes("const invalidMode=durable?'handoff-rsa-durable-invalid':"));
   assert.ok(runner.includes('await auditedHandoff(host,temp,{'));
   assert.ok(runner.includes('privateKey:signer?.privateKey??null,durable'));
