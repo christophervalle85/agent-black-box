@@ -206,9 +206,21 @@ jobs:
             fi
           done
           echo "PASS: Diagnostic-only crash worker and signed host built with pre/post nonce crash injection, exact allowlists and no GUI execution."
+          xcrun clang "${flags[@]}" -fno-objc-arc -o "$out/KeychainControllerSigner" native/macos/xpc/KeychainControllerSigner.m -framework Foundation -framework Security
+          set +e
+          bad_output=$("$out/KeychainControllerSigner" unexpected)
+          bad_code=$?
+          empty_signature=$("$out/KeychainControllerSigner" sign </dev/null)
+          empty_code=$?
+          set -e
+          if [ "$bad_code" -ne 90 ] || [ -n "$bad_output" ] || [ "$empty_code" -ne 87 ] || [ -n "$empty_signature" ]; then
+            echo "ERROR: Provisioned Keychain signer exposed an unexpected command or unvalidated signature."
+            exit 1
+          fi
+          echo "PASS: Provisioned Keychain RSA helper compiled and invalid/empty signing calls denied; no Keychain identity created on CI."
           echo "PASS: Real XPC worker process exit/PID/instance evidence requires an interactive development Mac."
           echo "PASS: Durable native replay rejects symlinks and forged nonce metadata; 8 concurrent processes yield exactly one committed nonce."
-          echo "PASS: Twenty-four native fixture executables compiled with Apple's SDK; fault injection and real worker restarts still require interactive Mac acceptance."
+          echo "PASS: Twenty-five native fixture executables compiled with Apple's SDK; fault injection and real worker restarts still require interactive Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
