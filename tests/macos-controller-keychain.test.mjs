@@ -239,3 +239,26 @@ test('native Keychain signer independently re-verifies Node HMAC audit and exact
   assert.match(ci,/mcp-macos-controller-audit-vector\.mjs/);
   assert.doesNotMatch(verifier,/unlink(at)?\s*\(/);
 });
+
+test('native audit gate is rechecked after operator consent and rejects type-confused proof fields',()=>{
+  const signer=contents('native/macos/xpc/KeychainControllerSigner.m');
+  const verifier=contents('native/macos/xpc/ControllerAuditVerifier.h');
+  const witness='bbx_test_verify_native_audit(auditDirectory,&review,mac)';
+  const consent='if(!approveExactlyReviewedSyntheticTransaction(&review))return 87;';
+  const reservation='bbx_reviewed_replay_reserve(';
+  const signature='SecKeyCreateSignature(';
+  const first=signer.indexOf(witness);
+  const after=signer.indexOf(witness,first+1);
+  assert.ok(first>0&&first<signer.indexOf(consent));
+  assert.ok(after>signer.indexOf(consent)&&after<signer.indexOf(reservation));
+  assert.ok(after<signer.indexOf(signature));
+  for(const required of [
+    '![mac[@"prev"] isKindOfClass:[NSString class]]',
+    '![source isKindOfClass:[NSString class]]',
+    '![event[@"transferTransactionId"] isKindOfClass:[NSString class]]',
+    '![event[@"transferNonce"] isKindOfClass:[NSString class]]',
+    '![event[@"transferSHA256"] isKindOfClass:[NSString class]]',
+    '![checkpoint[@"mac"] isKindOfClass:[NSString class]]'
+  ])assert.ok(verifier.includes(required),required);
+  assert.match(verifier,/O_RDONLY\|O_NOFOLLOW\|O_CLOEXEC/);
+});
