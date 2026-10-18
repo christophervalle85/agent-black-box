@@ -49,6 +49,7 @@ jobs:
       - run: node --check src/macos-controller-keychain.mjs
       - run: node --check src/macos-controller-pin.mjs
       - run: node --check examples/mcp-macos-controller-keychain.mjs
+      - run: node --check examples/mcp-macos-controller-audit-vector.mjs
   macos-native-compile:
     # Run a real Apple SDK compile, NOT a GUI authentication/file-picker test.
     runs-on: macos-15
@@ -221,6 +222,28 @@ jobs:
             exit 1
           fi
           echo "PASS: Provisioned Keychain RSA helper compiled and invalid/empty signing calls denied; no Keychain identity created on CI."
+          # An independent native parser verifies exact HMAC audit evidence.
+          xcrun clang "${flags[@]}" -fno-objc-arc -o "$out/ControllerAuditVector" native/macos/xpc/ControllerAuditVector.m -framework Foundation
+          auditdir="$out/controller-audit-good"
+          mkdir -m 700 "$auditdir"
+          node examples/mcp-macos-controller-audit-vector.mjs "$auditdir"
+          "$out/ControllerAuditVector" valid "$auditdir" < "$auditdir/audit-wire.txt"
+          cp "$auditdir/audit-wire.txt" "$out/native-audit-bad-wire.txt"
+          node -e 'const fs=require("fs");const p=process.argv[1];const s=fs.readFileSync(p,"utf8");fs.writeFileSync(p,s.replace(/reservationMac=[a-f0-9]{64}/,"reservationMac="+"f".repeat(64)));' "$out/native-audit-bad-wire.txt"
+          "$out/ControllerAuditVector" invalid "$auditdir" < "$out/native-audit-bad-wire.txt"
+          tampered="$out/controller-audit-tampered"
+          cp -R "$auditdir" "$tampered"
+          node -e 'const fs=require("fs");const p=process.argv[1];const s=fs.readFileSync(p,"utf8");if(!s.includes("MAC_TRANSFER_APPROVED"))process.exit(87);fs.writeFileSync(p,s.replace("MAC_TRANSFER_APPROVED","MAC_TRANSFER_DENIED"));' "$tampered/handoff-audit.jsonl"
+          "$out/ControllerAuditVector" invalid "$tampered" < "$auditdir/audit-wire.txt"
+          stale="$out/controller-audit-stale"
+          cp -R "$auditdir" "$stale"
+          node -e 'const fs=require("fs");const p=process.argv[1];const j=JSON.parse(fs.readFileSync(p,"utf8"));j.seq+=1;fs.writeFileSync(p,JSON.stringify(j)+"\n");' "$stale/handoff-audit.jsonl.anchor.json"
+          "$out/ControllerAuditVector" invalid "$stale" < "$auditdir/audit-wire.txt"
+          loose="$out/controller-audit-loose"
+          cp -R "$auditdir" "$loose"
+          chmod 755 "$loose"
+          "$out/ControllerAuditVector" invalid "$loose" < "$auditdir/audit-wire.txt"
+          echo "PASS: Native HMAC verifier accepted exact reservation and denied stale, forged, modified and unsafe audit inputs."
           xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -DBBX_TEST_DURABLE_REPLAY=1 -DBBX_TEST_DURABLE_WORKER_RESTART=1 -DBBX_TEST_CRASH_RECONCILE=1 -DBBX_TEST_KEYCHAIN_FULL_SUITE=1 -o "$out/ReviewedKeychainSuiteHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
           for old_mode in approved cancel expired handoff-approved handoff-rsa-approved handoff-rsa-invalid garbage; do
             set +e
@@ -235,7 +258,7 @@ jobs:
           echo "PASS: Combined pinned Keychain restart/crash host compiles with strictly bounded signed RSA modes; GUI consent still requires a Mac."
           echo "PASS: Real XPC worker process exit/PID/instance evidence requires an interactive development Mac."
           echo "PASS: Durable native replay rejects symlinks and forged nonce metadata; 8 concurrent processes yield exactly one committed nonce."
-          echo "PASS: Twenty-six native fixture executables compiled with Apple's SDK; fault injection and real worker restarts still require interactive Mac acceptance."
+          echo "PASS: Twenty-seven native fixture executables compiled with Apple's SDK; fault injection and real worker restarts still require interactive Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
