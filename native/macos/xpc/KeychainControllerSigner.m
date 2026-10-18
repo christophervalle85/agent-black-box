@@ -28,6 +28,7 @@
 #include <time.h>
 #include "ReviewedTransactionHandoff.h"
 #include "ControllerSigningReservation.h"
+#include "ControllerAuditVerifier.h"
 
 static NSString *const kKeyTag=@"dev.agentblackbox.test.controller.rsa-pss-v1";
 static NSData *tagData(void){
@@ -146,7 +147,7 @@ static bool approveExactlyReviewedSyntheticTransaction(
     return timeout==0&&approved;
 }
 
-static int signFixedSyntheticReview(void){
+static int signFixedSyntheticReview(const char *auditDirectory){
     /* A bounded stdin record has the exact canonical fields and a single
        trailing reservationMac=64-lowercase-hex line; no other fields. */
     char source[900]={0};
@@ -194,6 +195,10 @@ static int signFixedSyntheticReview(void){
     if(close(beforeDir)!=0)return 87;
     if(prior==BBX_REPLAY_MATCHING_MARKER)return 88; // exact duplicate
     if(prior!=BBX_REPLAY_NO_MARKER)return 87; // unsafe evidence
+    // Verify actual HMAC chain and transaction reservation, NOT merely the
+    // caller-provided hex digest. Node holds this test key; compromised Node
+    // remains within the threat model's explicitly unprotected boundary.
+    if(!bbx_test_verify_native_audit(auditDirectory,&review,mac))return 87;
     struct timespec clockValue={0};
     if(clock_gettime(CLOCK_REALTIME,&clockValue)!=0 ||
        clockValue.tv_sec<0)return 87;
@@ -250,10 +255,11 @@ static int signFixedSyntheticReview(void){
 }
 int main(int argc,const char *argv[]){
     @autoreleasepool {
-        if(argc!=2)return 90;
-        if(strcmp(argv[1],"provision")==0)return provision();
-        if(strcmp(argv[1],"public")==0)return exportPublic();
-        if(strcmp(argv[1],"sign")==0)return signFixedSyntheticReview();
+        if(argc<2||argc>3)return 90;
+        if(argc==2&&strcmp(argv[1],"provision")==0)return provision();
+        if(argc==2&&strcmp(argv[1],"public")==0)return exportPublic();
+        if(strcmp(argv[1],"sign")==0)
+            return argc==3?signFixedSyntheticReview(argv[2]):87;
         return 90;
     }
 }
