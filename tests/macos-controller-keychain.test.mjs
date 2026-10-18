@@ -101,3 +101,52 @@ test('Keychain signer never emits private key material, provisions only explicit
   assert.equal(packageFile.scripts['mcp:mac-controller-key'],
     'node examples/mcp-macos-controller-keychain.mjs');
 });
+
+test('native controller consent cannot be bypassed and only signs exact synthetic bytes',()=>{
+  const source=contents('native/macos/xpc/KeychainControllerSigner.m');
+  const build=contents('examples/mcp-macos-controller-keychain.mjs');
+  const runner=contents('examples/mcp-macos-xpc-native-reviewed.mjs');
+  const ci=contents('.github/workflows/ci.yml');
+  const signingFunction=source.slice(source.indexOf('static int signFixedSyntheticReview(void)'));
+  assert.match(source,/LAPolicyDeviceOwnerAuthenticationWithBiometrics/);
+  assert.match(source,/touchIDAuthenticationAllowableReuseDuration=0/);
+  assert.match(source,/evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics/);
+  assert.match(source,/dispatch_semaphore_wait\(completed/);
+  assert.match(source,/if\(review\.byteLength!=39\|\|/);
+  assert.match(source,/661a096ac3bcad82021fdc5db4aff8358cc011409053809e9ebd19b0b81d6be3/);
+  assert.match(source,/if\(afterApproval<review\.issuedAt\|\|afterApproval>=review\.expiresAt\)/);
+  assert.match(source,/return timeout==0&&approved/);
+  assert.ok(signingFunction.indexOf('if(!approveExactlyReviewedSyntheticTransaction(&review))return 87;') <
+    signingFunction.indexOf('SecKeyCreateSignature('));
+  assert.ok(signingFunction.indexOf('expectedSyntheticSHA') <
+    signingFunction.indexOf('if(!approveExactlyReviewedSyntheticTransaction(&review))return 87;'));
+  assert.match(build,/'-framework','LocalAuthentication'/);
+  assert.match(build, /invoke\(helper,\['sign'\],\{input:unsigned,timeout:50000\}\)/);
+  assert.ok(!runner.includes("['provision']"));
+  // Native signing must only happen AFTER a durable controller reservation;
+  // preflight failures use an UNTRUSTED fixture and require no biometrics.
+  assert.ok(runner.includes('const preflightKey=signController?'));
+  assert.ok(runner.includes('signController(context.transaction,store.verify().head)'));
+  assert.ok(runner.includes('MAC_TRANSFER_DISPATCH_RESERVED'));
+  assert.match(ci,/KeychainControllerSigner\.m -framework Foundation -framework Security -framework LocalAuthentication/);
+});
+test('combined Keychain suite exercises independent reviews with durable restart and both uncertain crashes',()=>{
+  const runner=contents('examples/mcp-macos-xpc-native-reviewed.mjs');
+  const host=contents('native/macos/xpc/ReviewedTransferHost.m');
+  const ci=contents('.github/workflows/ci.yml');
+  assert.ok(runner.includes("mode==='handoff-rsa-keychain-suite'"));
+  for(const required of [
+    "['restart',{restart:true}]",
+    "['crash-before',{crashPhase:'before'}]",
+    "['crash-after',{crashPhase:'after'}]",
+    'mkdirSync(auditDir,{mode:0o700})',
+    'signController,durable:true,...options',
+    '-DBBX_TEST_KEYCHAIN_FULL_SUITE=1',
+    'One pinned Keychain controller identity passed native consent',
+    'same-user Keychain access and production controller authority are NOT proven'
+  ])assert.ok(runner.includes(required),required);
+  assert.match(host,/#ifdef BBX_TEST_KEYCHAIN_FULL_SUITE/);
+  assert.match(ci,/ReviewedKeychainSuiteHost/);
+  assert.match(ci,/BBX_TEST_KEYCHAIN_FULL_SUITE=1/);
+  assert.ok(ci.includes('no Keychain identity created on CI'));
+});
