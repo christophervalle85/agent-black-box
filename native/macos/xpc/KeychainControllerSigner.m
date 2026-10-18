@@ -191,7 +191,9 @@ static int signFixedSyntheticReview(void){
     if(beforeDir<0)return 87;
     const BBXReplayObservation prior=bbx_reviewed_replay_observe(
         beforeDir,review.nonce,review.transactionId);
-    if(close(beforeDir)!=0||prior!=BBX_REPLAY_NO_MARKER)return 87;
+    if(close(beforeDir)!=0)return 87;
+    if(prior==BBX_REPLAY_MATCHING_MARKER)return 88; // exact duplicate
+    if(prior!=BBX_REPLAY_NO_MARKER)return 87; // unsafe evidence
     struct timespec clockValue={0};
     if(clock_gettime(CLOCK_REALTIME,&clockValue)!=0 ||
        clockValue.tv_sec<0)return 87;
