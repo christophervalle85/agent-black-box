@@ -14,7 +14,9 @@ const marker={
   'handoff-rsa-durable-invalid':'BBX_REVIEWED_XPC_INVALID_DURABLE_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
   'handoff-rsa-durable-approved':'BBX_REVIEWED_XPC_RSA_DURABLE_TOUCHID_ACCEPTED\n',
   'handoff-rsa-durable-replay':'BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED\n',
-  'handoff-rsa-durable-restart':'BBX_REVIEWED_XPC_WORKER_RESTART_REPLAY_DENIED\n'
+  'handoff-rsa-durable-restart':'BBX_REVIEWED_XPC_WORKER_RESTART_REPLAY_DENIED\n',
+  'handoff-rsa-crash-before':'BBX_REVIEWED_XPC_CRASH_BEFORE_NO_MARKER_NO_RETRY\n',
+  'handoff-rsa-crash-after':'BBX_REVIEWED_XPC_CRASH_AFTER_SPENT_NO_ACK_NO_RETRY\n'
 };
 const good=mode=>({stdout:marker[mode],stderr:'',status:0,
   signal:null,error:null});
@@ -172,4 +174,76 @@ test('controlled worker restart proves old PID exited and a new signed worker de
   assert.match(ci,/ReviewedWorkerRestartWorker/);
   assert.match(ci,/BBX_TEST_DURABLE_WORKER_RESTART=1/);
   assert.doesNotMatch(worker,/kill\s*\(|\bexecl?\s*\(/);
+});
+
+test('native crash injection and reconciliation cannot produce a success receipt or retry',()=>{
+  const host=readFileSync(new URL(
+    '../native/macos/xpc/ReviewedTransferHost.m',import.meta.url),'utf8');
+  const worker=readFileSync(new URL(
+    '../native/macos/xpc/TransferReceiptService.m',import.meta.url),'utf8');
+  const crash=readFileSync(new URL(
+    '../native/macos/xpc/ReviewedCrashReconcileTest.h',import.meta.url),'utf8');
+  const replay=readFileSync(new URL(
+    '../native/macos/xpc/ReviewedDurableReplay.h',import.meta.url),'utf8');
+  const runner=readFileSync(new URL(
+    '../examples/mcp-macos-xpc-native-reviewed.mjs',import.meta.url),'utf8');
+  const ci=readFileSync(new URL(
+    '../.github/workflows/ci.yml',import.meta.url),'utf8');
+  for(const requirement of [
+    '#ifdef BBX_TEST_CRASH_RECONCILE',
+    'bbx_test_maybe_crash_receipt(nonce,transactionId,1)',
+    'bbx_test_maybe_crash_receipt(nonce,transactionId,2)',
+    'bbx_test_handle_crash_reconcile_control(peer,event)'
+  ])assert.ok(worker.includes(requirement),requirement);
+  assert.ok(worker.indexOf('bbx_test_maybe_crash_receipt(nonce,transactionId,1)') <
+    worker.indexOf('bbx_reviewed_replay_reserve('));
+  assert.ok(worker.indexOf('bbx_test_maybe_crash_receipt(nonce,transactionId,2)') >
+    worker.indexOf('bbx_reviewed_replay_reserve('));
+  for(const requirement of [
+    'BBX_REPLAY_MATCHING_MARKER',
+    'BBX_REPLAY_NO_MARKER',
+    'BBX_REPLAY_UNVERIFIABLE',
+    'O_RDONLY|O_NOFOLLOW|O_CLOEXEC',
+    'S_ISREG(fileStat.st_mode)',
+    'fileStat.st_nlink==1',
+    'memcmp(observed,expected,(size_t)n)==0',
+    'errno==ENOENT'
+  ])assert.ok(replay.includes(requirement),requirement);
+  assert.match(crash,/bbx_test_arm_receipt_crash/);
+  assert.match(crash,/bbx_test_observe_receipt/);
+  assert.match(crash,/bbx_test_armed_nonce/);
+  assert.match(crash,/bbx_test_armed_txid/);
+  assert.match(crash,/bbx_reviewed_replay_observe/);
+  assert.match(crash,/_exit\(boundary==1\?91:92\)/);
+  assert.match(crash,/count==\(arm\?4U:3U\)/);
+  assert.match(crash,/#error "Crash reconciliation requires a signed durable worker restart fixture/);
+  for(const requirement of [
+    'bbx_test_crash_and_observe(&review',
+    'oldExited',
+    'errno==ESRCH',
+    'restarted.pid!=before.pid',
+    'strcmp(restarted.instance,before.instance)!=0',
+    'bbx_test_observe_receipt',
+    'NO_MARKER',
+    'MATCHING_MARKER',
+    'BBX_REVIEWED_XPC_CRASH_RECONCILIATION_NOT_PROVEN'
+  ])assert.ok(host.includes(requirement),requirement);
+  assert.ok(host.indexOf('const int auth=authenticateReview(&review)') <
+    host.indexOf('bbx_test_crash_and_observe(&review'));
+  for(const requirement of [
+    "mode==='handoff-rsa-crash-before'",
+    "mode==='handoff-rsa-crash-after'",
+    'if(!uncertain||!nativeCrashVerified||callbackCount!==1)',
+    'classifyMacSyntheticUncertainReceipt(report',
+    "ruleId!=='MAC_TRANSFER_DISPATCH_UNCERTAIN'",
+    'if(callbackCount!==1)',
+    'observation:crashPhase',
+    'if(evidence.status!=='
+  ])assert.ok(runner.includes(requirement),requirement);
+  assert.match(ci,/ReviewedCrashHost/);
+  assert.match(ci,/ReviewedCrashWorker/);
+  assert.match(ci,/BBX_TEST_CRASH_RECONCILE=1/);
+  assert.match(ci,/observe-foreign/);
+  assert.match(ci,/observe-corrupt/);
+  assert.doesNotMatch(worker,/\b(?:kill|fork|exec)\s*\(/);
 });
