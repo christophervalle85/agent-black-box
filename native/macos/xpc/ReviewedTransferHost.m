@@ -166,7 +166,7 @@ static xpc_connection_t openWorker(void){
 }
 static bool statusIs(xpc_connection_t peer,const NativeReview *review,
                      const unsigned char *bytes,size_t count,
-                     const char *expected){
+                     const char *expected,const char *mutation){
     if(!reviewIsExact(review))return false;
     xpc_object_t request=xpc_dictionary_create(NULL,NULL,0);
     if(!request)return false;
@@ -182,6 +182,28 @@ static bool statusIs(xpc_connection_t peer,const NativeReview *review,
     xpc_dictionary_set_int64(request,"issuedAt",review->issuedAt);
     xpc_dictionary_set_int64(request,"expiresAt",review->expiresAt);
     xpc_dictionary_set_data(request,"payload",bytes,count);
+    // Controlled wire-level attack fixtures. All remain syntactically typed
+    // XPC dictionaries; the signed worker must reject their identity.
+    if(mutation){
+        if(strcmp(mutation,"bad-transaction-id")==0){
+            char bad[65];
+            memcpy(bad,review->transactionId,sizeof(bad));
+            bad[0]=bad[0]=='f'?'e':'f';
+            xpc_dictionary_set_string(request,"transactionId",bad);
+        }else if(strcmp(mutation,"bad-version")==0){
+            xpc_dictionary_set_uint64(request,"version",2);
+        }else if(strcmp(mutation,"bad-note")==0){
+            xpc_dictionary_set_string(request,"name","bbx-test-other.txt");
+        }else if(strcmp(mutation,"bad-nonce")==0){
+            char bad[37];
+            memcpy(bad,review->nonce,sizeof(bad));
+            bad[0]=bad[0]=='f'?'e':'f';
+            xpc_dictionary_set_string(request,"nonce",bad);
+        }else{
+            xpc_release(request);
+            return false;
+        }
+    }
     xpc_object_t reply=xpc_connection_send_message_with_reply_sync(peer,request);
     xpc_release(request);
     if(!reply)return false;
@@ -259,10 +281,21 @@ int main(int argc,const char *argv[]){
     changed[0]^=1;
     // One Touch ID review: changed bytes MUST be rejected; exact bytes
     // may be accepted once, and replay must then be rejected.
-    bool valid=statusIs(peer,&review,changed,sizeof(changed),
-                         "DIGEST_MISMATCH") &&
-               statusIs(peer,&review,fixture,sizeof(fixture)-1,"ACCEPTED") &&
-               statusIs(peer,&review,fixture,sizeof(fixture)-1,"REPLAY");
+    bool valid=
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,
+                        "BAD_REQUEST","bad-transaction-id") &&
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,
+                        "BAD_REQUEST","bad-version") &&
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,
+                        "BAD_REQUEST","bad-note") &&
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,
+                        "BAD_REQUEST","bad-nonce") &&
+               statusIs(peer,&review,changed,sizeof(changed),
+                        "DIGEST_MISMATCH",NULL) &&
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,
+                        "ACCEPTED",NULL) &&
+               statusIs(peer,&review,fixture,sizeof(fixture)-1,
+                        "REPLAY",NULL);
     if(memset_s(changed,sizeof(changed),0,sizeof(changed))!=0)abort();
     xpc_connection_cancel(peer);
     xpc_release(peer);

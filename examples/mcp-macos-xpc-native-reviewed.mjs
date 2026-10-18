@@ -122,7 +122,7 @@ async function main(){
       });
       assessNativeReviewedXpc(check,outcome);
       if(check==='approved')
-        console.log('PASS: Native biometric approval permitted exact bytes once; altered bytes and replay were denied by the signed XPC worker.');
+        console.log('PASS: Native biometric approval permitted exact bytes once; modified transaction ID, version, target and nonce, altered bytes and replay were denied by the signed XPC worker.');
       else if(check==='cancel')
         console.log('PASS: Explicit user cancellation blocked XPC dispatch within the signed native host.');
       else
