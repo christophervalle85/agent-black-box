@@ -8,7 +8,9 @@ const marker={
   cancel:'BBX_REVIEWED_XPC_CANCELLED_NO_DISPATCH\n',
   expired:'BBX_REVIEWED_XPC_EXPIRED_NO_DISPATCH\n',
   'handoff-invalid':'BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC\n',
-  'handoff-approved':'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED\n'
+  'handoff-approved':'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED\n',
+  'handoff-rsa-invalid':'BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
+  'handoff-rsa-approved':'BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED\n'
 };
 const good=mode=>({stdout:marker[mode],stderr:'',status:0,
   signal:null,error:null});
@@ -93,13 +95,20 @@ test('native host owns authentication and worker validates exact reviewed receip
   assert.ok(runner.includes('createAuditedMacTransferController'));
   assert.ok(runner.includes('MAC_TRANSFER_DISPATCH_RESERVED'));
   assert.ok(runner.includes('SYNTHETIC_ACCEPTED'));
-  assert.ok(runner.includes("['handoff-approved']"));
-  assert.ok(runner.includes("['handoff-invalid']"));
-  assert.ok(runner.includes('await auditedHandoff(host,temp)'));
+  assert.ok(runner.includes("const approveMode=rsa?'handoff-rsa-approved':'handoff-approved'"));
+  assert.ok(runner.includes("const invalidMode=rsa?'handoff-rsa-invalid':'handoff-invalid'"));
+  assert.ok(runner.includes('await auditedHandoff(host,temp,{privateKey:signer?.privateKey??null})'));
   assert.ok(runner.includes("'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED"));
   assert.ok(host.includes('#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF'));
   assert.ok(host.includes('bbx_read_preissued_review(stdin,&preissued)'));
   assert.ok(host.indexOf('const bool valid=importPreissuedReview(&review);') <
     host.indexOf('const int auth=authenticateReview(&review);'));
   assert.ok(host.includes('BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC'));
+  assert.ok(host.includes('bbx_read_signed_preissued_review(stdin,&preissued)'));
+  assert.ok(host.includes('#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF'));
+  assert.ok(host.indexOf('importSignedPreissuedReview(&review)') <
+    host.indexOf('const int auth=authenticateReview(&review);'));
+  assert.ok(runner.includes('formatPinnedMacRsaPublicHeader(signer.publicKey)'));
+  assert.ok(runner.includes('reservationMac:store.verify().head'));
+  assert.ok(runner.includes("mode==='handoff-rsa'"));
 });
