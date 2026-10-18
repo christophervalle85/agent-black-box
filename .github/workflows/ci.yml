@@ -130,17 +130,25 @@ jobs:
           xcrun clang "${flags[@]}" -o "$out/ReviewedDurableReplayVector" native/macos/xpc/ReviewedDurableReplayVector.c
           replay="$out/native-replay-state"
           mkdir -m 700 "$replay"
+          "$out/ReviewedDurableReplayVector" observe-empty "$replay"
           "$out/ReviewedDurableReplayVector" fresh "$replay"
+          "$out/ReviewedDurableReplayVector" observe-spent "$replay"
+          "$out/ReviewedDurableReplayVector" observe-foreign "$replay"
+          "$out/ReviewedDurableReplayVector" observe-bad-id "$replay"
           "$out/ReviewedDurableReplayVector" replay "$replay"
           "$out/ReviewedDurableReplayVector" other-id "$replay"
           "$out/ReviewedDurableReplayVector" bad-nonce "$replay"
           "$out/ReviewedDurableReplayVector" bad-id "$replay"
           chmod 755 "$replay"
           "$out/ReviewedDurableReplayVector" loose-dir "$replay"
+          "$out/ReviewedDurableReplayVector" observe-loose-dir "$replay"
           chmod 700 "$replay"
           printf 'DO_NOT_TOUCH' > "$out/marker-target"
           ln -s "$out/marker-target" "$replay/nonce-00000000-0000-4000-8000-000000000000.spent"
           "$out/ReviewedDurableReplayVector" symlink-marker "$replay"
+          "$out/ReviewedDurableReplayVector" observe-symlink "$replay"
+          printf 'CORRUPT\n' > "$replay/nonce-abcdef12-3456-4789-8abc-123456789abc.spent"
+          "$out/ReviewedDurableReplayVector" observe-corrupt "$replay"
           if [ "$(cat "$out/marker-target")" != "DO_NOT_TOUCH" ]; then
             echo "ERROR: Native replay marker symlink affected unrelated fixture."
             exit 1
@@ -184,9 +192,23 @@ jobs:
             fi
           done
           echo "PASS: Restart-only signed host and signed-peer XPC worker compiled; legacy commands denied without biometrics."
+          # Fault injection is an EXTRA, strictly diagnostic, opt-in compile mode.
+          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_DURABLE_REPLAY=1 -DBBX_TEST_DURABLE_WORKER_RESTART=1 -DBBX_TEST_CRASH_RECONCILE=1 -o "$out/ReviewedCrashWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
+          xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -DBBX_TEST_DURABLE_REPLAY=1 -DBBX_TEST_DURABLE_WORKER_RESTART=1 -DBBX_TEST_CRASH_RECONCILE=1 -o "$out/ReviewedCrashHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
+          for old_mode in approved cancel expired handoff-approved handoff-rsa-approved handoff-rsa-invalid handoff-rsa-durable-replay garbage; do
+            set +e
+            response=$("$out/ReviewedCrashHost" "$old_mode")
+            code=$?
+            set -e
+            if [ "$code" -ne 90 ] || [ "$response" != "BBX_REVIEWED_XPC_BAD_ARGS" ]; then
+              echo "ERROR: Crash reconciliation host exposed legacy or invalid invocation."
+              exit 1
+            fi
+          done
+          echo "PASS: Diagnostic-only crash worker and signed host built with pre/post nonce crash injection, exact allowlists and no GUI execution."
           echo "PASS: Real XPC worker process exit/PID/instance evidence requires an interactive development Mac."
           echo "PASS: Durable native replay rejects symlinks and forged nonce metadata; 8 concurrent processes yield exactly one committed nonce."
-          echo "PASS: Twenty-two native fixture executables compiled with Apple's SDK; durable worker GUI/XPC execution requires real-Mac acceptance."
+          echo "PASS: Twenty-four native fixture executables compiled with Apple's SDK; fault injection and real worker restarts still require interactive Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
