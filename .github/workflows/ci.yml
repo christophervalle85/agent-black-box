@@ -89,6 +89,14 @@ jobs:
           sed 's/^version=1$/version=2/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
           sed 's/^noteName=bbx-test-reviewed.txt$/noteName=bbx-test-other.txt/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
           sed 's/^transactionId=./transactionId=f/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^reviewId=1/reviewId=f/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^nonce=a/nonce=f/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^sha256=6/sha256=f/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^byteLength=39$/byteLength=039/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^issuedAt=1790000000000$/issuedAt=01790000000000/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed 's/^operation=import$/operation=export/' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          sed '$d' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
+          (cat "$out/review-wire.txt"; printf 'approved=true\n') | "$out/ReviewedHandoffVector" invalid
           echo "PASS: Native handoff envelope parser accepts only exact preissued synthetic reviewed data."
           echo "PASS: Fourteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
   official-mcp-sdk-interop:

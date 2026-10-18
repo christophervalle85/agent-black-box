@@ -6,7 +6,9 @@ import {assessNativeReviewedXpc} from '../examples/mcp-macos-xpc-native-reviewed
 const marker={
   approved:'BBX_REVIEWED_XPC_TOUCHID_APPROVED_TAMPER_REPLAY_BLOCKED\n',
   cancel:'BBX_REVIEWED_XPC_CANCELLED_NO_DISPATCH\n',
-  expired:'BBX_REVIEWED_XPC_EXPIRED_NO_DISPATCH\n'
+  expired:'BBX_REVIEWED_XPC_EXPIRED_NO_DISPATCH\n',
+  'handoff-invalid':'BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC\n',
+  'handoff-approved':'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED\n'
 };
 const good=mode=>({stdout:marker[mode],stderr:'',status:0,
   signal:null,error:null});
