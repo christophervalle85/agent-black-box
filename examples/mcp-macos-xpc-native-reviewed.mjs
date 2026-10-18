@@ -12,7 +12,7 @@ import {fileURLToPath} from 'node:url';
 import {
   buildSignedMacKeychainControllerHelper,
   readMacKeychainControllerIdentity,
-  signMacKeychainReviewedTransaction
+  signMacKeychainReviewedTransaction,assertMacKeychainSignerReplayDenied
 } from './mcp-macos-controller-keychain.mjs';
 import {assertMacControllerEnrolledPin} from '../src/macos-controller-pin.mjs';
 import {AuditStore} from '../src/audit.mjs';
@@ -138,17 +138,10 @@ async function auditedHandoff(host,dir,{
           privateKey,reservationMac:store.verify().head
         }):encodeCanonicalMacReviewedHandoff(context.transaction);
       if(signController){
-        // Native signer must burn this nonce BEFORE returning a signature.
-        // A second process must fail immediately without a second prompt.
-        try{
-          signController(context.transaction,store.verify().head);
-          throw Error('Native signer reissued a consumed review.');
-        }catch(error){
-          if(/reissued a consumed review/.test(error.message))throw error;
-          if(!/Keychain refused|did not obtain Touch ID consent/.test(error.message))
-            throw error;
-          signerReplayDenied=true;
-        }
+        // The second native helper MUST exit with the exact spent-nonce
+        // status, never with a generic failure or another signature.
+        signerReplayDenied=signController.verifyReplay(
+          context.transaction,store.verify().head);
       }
       if(denyController){
         // An actual signature after the operator was instructed to cancel
@@ -450,6 +443,10 @@ async function main(){
       signController=(transaction,reservationMac)=>
         signMacKeychainReviewedTransaction(helper,transaction,{
           publicKey:enrolled.publicKey,reservationMac
+        });
+      signController.verifyReplay=(transaction,reservationMac)=>
+        assertMacKeychainSignerReplayDenied(helper,transaction,{
+          reservationMac
         });
       console.log('PASS: Existing controller Keychain public identity pinned before the native host is code signed. SHA256: '+enrolled.sha256);
     }
