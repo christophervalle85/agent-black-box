@@ -262,6 +262,12 @@ static bool statusIs(xpc_connection_t peer,const NativeReview *review,
     return okay;
 }
 int main(int argc,const char *argv[]){
+#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+    /* A signed-authorization test binary must never expose the old unsigned
+       handoff or standalone approval modes, even under direct invocation. */
+    if(argc!=2 || (strcmp(argv[1],"handoff-rsa-approved")!=0 &&
+                   strcmp(argv[1],"handoff-rsa-invalid")!=0)){
+#else
     if(argc!=2 || (strcmp(argv[1],"approved")!=0 &&
                    strcmp(argv[1],"cancel")!=0 &&
                    strcmp(argv[1],"expired")!=0
@@ -269,11 +275,8 @@ int main(int argc,const char *argv[]){
                    && strcmp(argv[1],"handoff-approved")!=0 &&
                    strcmp(argv[1],"handoff-invalid")!=0
 #endif
-#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
-                   && strcmp(argv[1],"handoff-rsa-approved")!=0 &&
-                   strcmp(argv[1],"handoff-rsa-invalid")!=0
-#endif
                    )){
+#endif
         puts("BBX_REVIEWED_XPC_BAD_ARGS");
         return 90;
     }
@@ -284,11 +287,8 @@ int main(int argc,const char *argv[]){
         // Validated entirely before Touch ID or XPC. The RSA public key is
         // embedded before signing the diagnostic native app, not in stdin.
 #ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
-        const bool rsa=strncmp(argv[1],"handoff-rsa-",12)==0;
-        const bool valid=rsa?importSignedPreissuedReview(&review):
-                             importPreissuedReview(&review);
-        const bool negative=strcmp(argv[1],"handoff-invalid")==0 ||
-                            strcmp(argv[1],"handoff-rsa-invalid")==0;
+        const bool valid=importSignedPreissuedReview(&review);
+        const bool negative=strcmp(argv[1],"handoff-rsa-invalid")==0;
 #else
         const bool valid=importPreissuedReview(&review);
         const bool negative=strcmp(argv[1],"handoff-invalid")==0;
@@ -299,8 +299,7 @@ int main(int argc,const char *argv[]){
                 return 87;
             }
 #ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
-            puts(rsa?"BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC":
-                     "BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC");
+            puts("BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC");
 #else
             puts("BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC");
 #endif
