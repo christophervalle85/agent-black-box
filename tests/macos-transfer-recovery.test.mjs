@@ -6,8 +6,9 @@ import {join} from 'node:path';
 import {AuditStore} from '../src/audit.mjs';
 import {createMacTransferIntent} from '../src/macos-transfer-intent.mjs';
 import {createAuditedMacTransferController} from '../src/macos-transfer-controller.mjs';
-import {inspectMacSyntheticDispatchRecovery}
-  from '../src/macos-transfer-recovery.mjs';
+import {
+  inspectMacSyntheticDispatchRecovery,classifyMacSyntheticUncertainReceipt
+} from '../src/macos-transfer-recovery.mjs';
 
 const NOW=1_790_000_000_000;
 const BYTES=Buffer.from('BBX recovery synthetic bytes.\n');
@@ -143,3 +144,41 @@ test('truncated audit inspection windows are denied, not silently accepted',()=>
   assert.throws(()=>inspectMacSyntheticDispatchRecovery(store),
     /RECOVERY REQUIRED/);
 });
+
+test('native receipt observations never turn HMAC-uncertain reservations into success or retry',()=>fixture(
+  ()=>{throw Error('synthetic transport lost native ACK');},
+  async ctx=>{
+    await assert.rejects(ctx.controller.host.dispatchSynthetic(ctx.request()),
+      /uncertain/);
+    const report=inspectMacSyntheticDispatchRecovery(ctx.restart());
+    for(const observation of ['matching-marker','no-marker','unverifiable']){
+      const verdict=classifyMacSyntheticUncertainReceipt(report,{
+        reviewId:ctx.review.reviewId,observation
+      });
+      assert.equal(verdict.status,'unknown');
+      assert.equal(verdict.observation,observation);
+      assert.equal(verdict.canRetry,false);
+      assert.equal(verdict.canClaimSuccess,false);
+      assert.equal(Object.isFrozen(verdict),true);
+    }
+    const missing='123e4567-e89b-42d3-a456-426614174001';
+    for(const invalid of [
+      {reviewId:missing,observation:'matching-marker'},
+      {reviewId:ctx.review.reviewId,observation:'committed'},
+      {reviewId:ctx.review.reviewId,observation:true},
+      {reviewId:'not-a-review',observation:'no-marker'},
+      {reviewId:ctx.review.reviewId,observation:null}
+    ])assert.throws(()=>classifyMacSyntheticUncertainReceipt(report,invalid));
+    assert.equal(ctx.restart().list({limit:1})[0].ruleId,
+      'MAC_TRANSFER_DISPATCH_UNCERTAIN');
+  }
+));
+test('terminal simulated result cannot be reinterpreted as uncertain native evidence',()=>fixture(
+  ()=> 'SYNTHETIC_ACCEPTED',async ctx=>{
+    assert.equal(await ctx.controller.host.dispatchSynthetic(ctx.request()),true);
+    const report=inspectMacSyntheticDispatchRecovery(ctx.restart());
+    assert.throws(()=>classifyMacSyntheticUncertainReceipt(report,{
+      reviewId:ctx.review.reviewId,observation:'matching-marker'
+    }),/no unique uncertain reserved review/);
+  }
+));
