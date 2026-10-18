@@ -138,6 +138,25 @@ jobs:
           chmod 755 "$replay"
           "$out/ReviewedDurableReplayVector" loose-dir "$replay"
           chmod 700 "$replay"
+          printf 'DO_NOT_TOUCH' > "$out/marker-target"
+          ln -s "$out/marker-target" "$replay/nonce-00000000-0000-4000-8000-000000000000.spent"
+          "$out/ReviewedDurableReplayVector" symlink-marker "$replay"
+          if [ "$(cat "$out/marker-target")" != "DO_NOT_TOUCH" ]; then
+            echo "ERROR: Native replay marker symlink affected unrelated fixture."
+            exit 1
+          fi
+          race="$out/native-replay-race"
+          mkdir -m 700 "$race"
+          for i in $(seq 1 8); do
+            "$out/ReviewedDurableReplayVector" race "$race" > "$out/race-$i.txt" &
+          done
+          wait
+          fresh=$(grep -h -x 'BBX_DURABLE_NATIVE_FRESH' "$out"/race-*.txt | wc -l | tr -d ' ')
+          replayed=$(grep -h -x 'BBX_DURABLE_NATIVE_REPLAY' "$out"/race-*.txt | wc -l | tr -d ' ')
+          if [ "$fresh" -ne 1 ] || [ "$replayed" -ne 7 ]; then
+            echo "ERROR: Multiple native processes consumed one nonce or unexpected verdict."
+            exit 1
+          fi
           xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_DURABLE_REPLAY=1 -o "$out/ReviewedDurableWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
           xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -DBBX_TEST_DURABLE_REPLAY=1 -o "$out/ReviewedDurableSignedHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
           for old_mode in handoff-approved handoff-rsa-approved approved cancel expired; do
@@ -151,7 +170,7 @@ jobs:
             fi
           done
           echo "PASS: Durable RSA native host compiled and old unsigned modes remain disabled."
-          echo "PASS: Durable native nonce replays denied across distinct processes, changed transaction IDs and unsafe directory permissions."
+          echo "PASS: Durable native replay rejects symlinks and forged nonce metadata; 8 concurrent processes yield exactly one committed nonce."
           echo "PASS: Twenty native fixture executables compiled with Apple's SDK; durable worker GUI/XPC execution requires real-Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
