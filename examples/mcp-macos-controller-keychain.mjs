@@ -61,7 +61,7 @@ export function signMacKeychainReviewedTransaction(helper,tx,{
   publicKey,reservationMac,auditDirectory,now=Date.now()
 }={}){
   if(typeof auditDirectory!=='string'||!auditDirectory.startsWith('/')||
-     !auditDirectory.endsWith('audit-not-a-path')&&auditDirectory.includes('\0'))
+     auditDirectory.includes('\0'))
     throw Error('Native HMAC audit directory required.');
   const unsigned=encodeMacKeychainUnsignedReview(tx,{reservationMac,now});
   const result=invoke(helper,['sign',auditDirectory],
