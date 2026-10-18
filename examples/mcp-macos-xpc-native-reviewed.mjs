@@ -34,7 +34,10 @@ const marker=Object.freeze({
   'handoff-invalid':'BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC\n',
   'handoff-approved':'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED\n',
   'handoff-rsa-invalid':'BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
-  'handoff-rsa-approved':'BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED\n'
+  'handoff-rsa-approved':'BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED\n',
+  'handoff-rsa-durable-invalid':'BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
+  'handoff-rsa-durable-approved':'BBX_REVIEWED_XPC_RSA_DURABLE_TOUCHID_ACCEPTED\n',
+  'handoff-rsa-durable-replay':'BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED\n'
 });
 export function assessNativeReviewedXpc(mode,outcome){
   if(!Object.hasOwn(marker,mode))
@@ -78,16 +81,20 @@ function verifyWorkerSandbox(worker){
  * The host does NOT authenticate the HMAC reservation: this is not a
  * production-ready authorization channel or a bearer-ticket design.
  */
-async function auditedHandoff(host,dir,{privateKey=null}={}){
+async function auditedHandoff(host,dir,{privateKey=null,durable=false}={}){
   const rsa=privateKey!==null;
-  const approveMode=rsa?'handoff-rsa-approved':'handoff-approved';
-  const invalidMode=rsa?'handoff-rsa-invalid':'handoff-invalid';
+  if(durable&&!rsa)throw Error('Durable native replay requires signed controller data.');
+  const approveMode=durable?'handoff-rsa-durable-approved':
+    rsa?'handoff-rsa-approved':'handoff-approved';
+  const invalidMode=durable?'handoff-rsa-durable-invalid':
+    rsa?'handoff-rsa-invalid':'handoff-invalid';
   const bytes=Buffer.from('BBX synthetic Touch ID reviewed bytes.\n');
   const now=Date.now();
   const store=new AuditStore(join(dir,'handoff-audit.jsonl'),{
     externalReceiptFile:null
   });
   let callbackCount=0;
+  let signedCommittedWire=null;
   const controller=createAuditedMacTransferController({
     store,clock:Date.now,syntheticTimeoutMs:30000,
     syntheticTransport:context=>{
@@ -99,6 +106,7 @@ async function auditedHandoff(host,dir,{privateKey=null}={}){
       const wire=rsa?encodeMacReviewedRsaHandoff(context.transaction,{
         privateKey,reservationMac:store.verify().head
       }):encodeCanonicalMacReviewedHandoff(context.transaction);
+      if(durable)signedCommittedWire=Buffer.from(wire);
       const observed=spawnSync(host,[approveMode],{
         input:wire,encoding:'utf8',timeout:28000,maxBuffer:1024,
         env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
@@ -203,8 +211,24 @@ async function auditedHandoff(host,dir,{privateKey=null}={}){
     if(!/No unconsumed/.test(error.message))throw error;
   }
   if(callbackCount!==1)throw Error('One-use native launch check failed.');
+  if(durable){
+    if(!signedCommittedWire)
+      throw Error('Missing durably reserved original signed handoff.');
+    // A new native HOST process submits the previously signed transaction.
+    // This proves worker filesystem continuity, but does not itself prove
+    // launchd restarted the XPC worker between these two host invocations.
+    const replay=spawnSync(host,['handoff-rsa-durable-replay'],{
+      input:signedCommittedWire,encoding:'utf8',
+      timeout:10000,maxBuffer:1024,
+      env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
+    });
+    assessNativeReviewedXpc('handoff-rsa-durable-replay',replay);
+    console.log('PASS: Separate signed native host process received durable worker nonce REPLAY for the identical RSA-reviewed transaction.');
+  }
   console.log('PASS: Single HMAC-audited synthetic reservation launched one signed native Touch ID/XPC transaction; consumed review could not be replayed.');
-  console.log(rsa?
+  console.log(durable?
+    'NOTE: Test-only worker App Sandbox nonce marker persists; XPC worker restart is not proven. No independently provisioned controller identity, real file transfer or production authority.':
+    rsa?
     'NOTE: Public key pinned from an ephemeral local test issuer, not an independently provisioned controller identity. No trusted UI or durable replay; audit is disposable.':
     'NOTE: Local test controller decision and plain stdin record are not a production-authenticated handoff. Audit fixture is disposable.');
 }
@@ -215,14 +239,15 @@ async function main(){
     throw Error('Opt-in synthetic test must use MCP_SANDBOX=off.');
   const mode=process.argv[2];
   if(process.argv.length!==3 ||
-     (!['all','handoff','handoff-rsa','approved','cancel','expired'].includes(mode)))
-    throw Error('Expected one mode: all, handoff, handoff-rsa, approved, cancel or expired.');
+     (!['all','handoff','handoff-rsa','handoff-rsa-durable','approved','cancel','expired'].includes(mode)))
+    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, approved, cancel or expired.');
   const identity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Apple Development certificate discovery').stdout);
   const temp=mkdtempSync(join(tmpdir(),'bbx-native-reviewed-xpc-'));
   try{
-    const rsa=mode==='handoff-rsa';
+    const durable=mode==='handoff-rsa-durable';
+    const rsa=mode==='handoff-rsa'||durable;
     const signer=rsa?createEphemeralMacControllerSigner():null;
     if(signer)writeFileSync(join(temp,'BBXTestPinnedControllerKey.h'),
       formatPinnedMacRsaPublicHeader(signer.publicKey),{mode:0o600,flag:'wx'});
@@ -242,7 +267,8 @@ async function main(){
       '-DBBX_TEST_SIGNED_PEER_REQUIREMENT=1',
       '-DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1',
       '-DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1',
-      ...(rsa?['-DBBX_TEST_RSA_CONTROLLER_HANDOFF=1','-I',temp]:[])];
+      ...(rsa?['-DBBX_TEST_RSA_CONTROLLER_HANDOFF=1','-I',temp]:[]),
+      ...(durable?['-DBBX_TEST_DURABLE_REPLAY=1']:[])];
     command('/usr/bin/xcrun',['clang',...flags,'-o',host,
       join(native,'ReviewedTransferHost.m'),
       '-framework','Foundation','-framework','LocalAuthentication',
@@ -267,8 +293,10 @@ async function main(){
       throw Error('Signing Team ID mismatch; native review denied.');
     verifyWorkerSandbox(service);
     console.log('PASS: Apple Development-signed native Touch ID host and sandboxed XPC worker verified with matching Team IDs.');
-    if(mode==='handoff'||mode==='handoff-rsa'){
-      await auditedHandoff(host,temp,{privateKey:signer?.privateKey??null});
+    if(mode==='handoff'||mode==='handoff-rsa'||durable){
+      await auditedHandoff(host,temp,{
+        privateKey:signer?.privateKey??null,durable
+      });
       return;
     }
     // The combined test uses ONE signed app for all three independent
