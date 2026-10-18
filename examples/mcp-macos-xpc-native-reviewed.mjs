@@ -123,6 +123,7 @@ async function auditedHandoff(host,dir,{
   let checkedGenuineKeychainMutation=false;
   let nativeHostLaunchCount=0;
   let consentUnexpectedlyGranted=false;
+  let signerReplayDenied=false;
   const controller=createAuditedMacTransferController({
     store,clock:Date.now,syntheticTimeoutMs:30000,
     syntheticTransport:context=>{
@@ -136,6 +137,19 @@ async function auditedHandoff(host,dir,{
         rsa?encodeMacReviewedRsaHandoff(context.transaction,{
           privateKey,reservationMac:store.verify().head
         }):encodeCanonicalMacReviewedHandoff(context.transaction);
+      if(signController){
+        // Native signer must burn this nonce BEFORE returning a signature.
+        // A second process must fail immediately without a second prompt.
+        try{
+          signController(context.transaction,store.verify().head);
+          throw Error('Native signer reissued a consumed review.');
+        }catch(error){
+          if(/reissued a consumed review/.test(error.message))throw error;
+          if(!/Keychain refused|did not obtain Touch ID consent/.test(error.message))
+            throw error;
+          signerReplayDenied=true;
+        }
+      }
       if(denyController){
         // An actual signature after the operator was instructed to cancel
         // is a HARD failure. Never launch the native host on this branch.
@@ -304,7 +318,8 @@ async function auditedHandoff(host,dir,{
       uncertain=true;
     }
     if(!uncertain||!nativeCrashVerified||callbackCount!==1||
-       (signController&&!checkedGenuineKeychainMutation))
+       (signController&&(!checkedGenuineKeychainMutation||
+                         !signerReplayDenied)))
       throw Error('Controlled native crash and uncertain audit not proven.');
     const reopened=new AuditStore(store.filename,{externalReceiptFile:null});
     const report=inspectMacSyntheticDispatchRecovery(reopened);
@@ -337,7 +352,8 @@ async function auditedHandoff(host,dir,{
     reviewId:review.reviewId,intent,bytes
   });
   if(result!==true || callbackCount!==1 || store.verify().ok!==true ||
-     (signController&&!checkedGenuineKeychainMutation))
+     (signController&&(!checkedGenuineKeychainMutation||
+                       !signerReplayDenied)))
     throw Error('Audited synthetic handoff acceptance not established.');
   const end=store.list({limit:20});
   const rules=end.map(e=>e.ruleId);
@@ -381,6 +397,7 @@ async function auditedHandoff(host,dir,{
     }
   }
   console.log('PASS: Single HMAC-audited synthetic reservation launched one signed native Touch ID/XPC transaction; consumed review could not be replayed.');
+  if(signController)console.log('PASS: Native controller signing nonce was durably consumed: a second signer process refused identical review without reissuing a signature.');
   if(signController)console.log('PASS: Pre-enrolled macOS Keychain RSA controller identity signed the exact synthetic audited handoff; genuine signed-field mutations were rejected before host Touch ID/XPC and no private key bytes reached Node.');
   console.log(signController?
     'NOTE: Persistent Keychain identity and native biometric consent tested with synthetic data. This signer does not independently authenticate the Node HMAC checkpoint; same-user Keychain access and production controller authority are NOT proven. Real import/export remains disabled.':
