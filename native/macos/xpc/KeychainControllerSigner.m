@@ -27,6 +27,7 @@
 #include <stdbool.h>
 #include <time.h>
 #include "ReviewedTransactionHandoff.h"
+#include "ControllerSigningReservation.h"
 
 static NSString *const kKeyTag=@"dev.agentblackbox.test.controller.rsa-pss-v1";
 static NSData *tagData(void){
@@ -183,6 +184,14 @@ static int signFixedSyntheticReview(void){
     if(review.byteLength!=39||
        strcmp(review.sha256,expectedSyntheticSHA)!=0)
         return 87;
+    /* Refuse an already consumed or unverifiable nonce BEFORE prompting.
+       This check never authorizes signing: the post-consent O_EXCL claim is
+       still required for cross-process atomicity. */
+    const int beforeDir=bbx_test_controller_signing_directory();
+    if(beforeDir<0)return 87;
+    const BBXReplayObservation prior=bbx_reviewed_replay_observe(
+        beforeDir,review.nonce,review.transactionId);
+    if(close(beforeDir)!=0||prior!=BBX_REPLAY_NO_MARKER)return 87;
     struct timespec clockValue={0};
     if(clock_gettime(CLOCK_REALTIME,&clockValue)!=0 ||
        clockValue.tv_sec<0)return 87;
@@ -195,6 +204,15 @@ static int signFixedSyntheticReview(void){
     const int64_t afterApproval=(int64_t)clockValue.tv_sec*1000+
                                 clockValue.tv_nsec/1000000;
     if(afterApproval<review.issuedAt||afterApproval>=review.expiresAt)
+        return 87;
+    /* Native consent is single-use: consume the nonce DURABLY before
+       using the Keychain signing key, even if the signature/ACK fails.
+       This is a separate native evidence boundary, not Node HMAC proof. */
+    const int signingDir=bbx_test_controller_signing_directory();
+    if(signingDir<0)return 87;
+    const BBXReplayDecision reserved=bbx_reviewed_replay_reserve(
+        signingDir,review.nonce,review.transactionId);
+    if(close(signingDir)!=0||reserved!=BBX_REPLAY_FRESH_COMMITTED)
         return 87;
 
     OSStatus found=errSecSuccess;
