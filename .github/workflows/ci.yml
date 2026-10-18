@@ -209,7 +209,7 @@ jobs:
             fi
           done
           echo "PASS: Diagnostic-only crash worker and signed host built with pre/post nonce crash injection, exact allowlists and no GUI execution."
-          xcrun clang "${flags[@]}" -fno-objc-arc -o "$out/KeychainControllerSigner" native/macos/xpc/KeychainControllerSigner.m -framework Foundation -framework Security
+          xcrun clang "${flags[@]}" -fno-objc-arc -o "$out/KeychainControllerSigner" native/macos/xpc/KeychainControllerSigner.m -framework Foundation -framework Security -framework LocalAuthentication
           set +e
           bad_output=$("$out/KeychainControllerSigner" unexpected)
           bad_code=$?
@@ -221,9 +221,21 @@ jobs:
             exit 1
           fi
           echo "PASS: Provisioned Keychain RSA helper compiled and invalid/empty signing calls denied; no Keychain identity created on CI."
+          xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -DBBX_TEST_DURABLE_REPLAY=1 -DBBX_TEST_DURABLE_WORKER_RESTART=1 -DBBX_TEST_CRASH_RECONCILE=1 -DBBX_TEST_KEYCHAIN_FULL_SUITE=1 -o "$out/ReviewedKeychainSuiteHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
+          for old_mode in approved cancel expired handoff-approved handoff-rsa-approved handoff-rsa-invalid garbage; do
+            set +e
+            response=$("$out/ReviewedKeychainSuiteHost" "$old_mode")
+            code=$?
+            set -e
+            if [ "$code" -ne 90 ] || [ "$response" != "BBX_REVIEWED_XPC_BAD_ARGS" ]; then
+              echo "ERROR: Combined signed Keychain host exposed unsigned or legacy invocation."
+              exit 1
+            fi
+          done
+          echo "PASS: Combined pinned Keychain restart/crash host compiles with strictly bounded signed RSA modes; GUI consent still requires a Mac."
           echo "PASS: Real XPC worker process exit/PID/instance evidence requires an interactive development Mac."
           echo "PASS: Durable native replay rejects symlinks and forged nonce metadata; 8 concurrent processes yield exactly one committed nonce."
-          echo "PASS: Twenty-five native fixture executables compiled with Apple's SDK; fault injection and real worker restarts still require interactive Mac acceptance."
+          echo "PASS: Twenty-six native fixture executables compiled with Apple's SDK; fault injection and real worker restarts still require interactive Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
