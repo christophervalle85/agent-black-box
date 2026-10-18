@@ -127,7 +127,20 @@ jobs:
             "$out/ReviewedSignedAuthorityVector" invalid < "$out/$input.txt"
           done
           echo "PASS: Pinned RSA-PSS native verifier rejected another signing key, forged review, and modified reservation."
-          echo "PASS: Seventeen native fixture executables compiled with Apple's SDK, including RSA-pinned signed-host test mode; no GUI/XPC execution was attempted."
+          xcrun clang "${flags[@]}" -o "$out/ReviewedDurableReplayVector" native/macos/xpc/ReviewedDurableReplayVector.c
+          replay="$out/native-replay-state"
+          mkdir -m 700 "$replay"
+          "$out/ReviewedDurableReplayVector" fresh "$replay"
+          "$out/ReviewedDurableReplayVector" replay "$replay"
+          "$out/ReviewedDurableReplayVector" other-id "$replay"
+          "$out/ReviewedDurableReplayVector" bad-nonce "$replay"
+          "$out/ReviewedDurableReplayVector" bad-id "$replay"
+          chmod 755 "$replay"
+          "$out/ReviewedDurableReplayVector" loose-dir "$replay"
+          chmod 700 "$replay"
+          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_DURABLE_REPLAY=1 -o "$out/ReviewedDurableWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
+          echo "PASS: Durable native nonce replays denied across distinct processes, changed transaction IDs and unsafe directory permissions."
+          echo "PASS: Nineteen native fixture executables compiled with Apple's SDK; durable worker GUI/XPC execution requires real-Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
