@@ -192,7 +192,7 @@ test('native Keychain controller consumes one durable nonce before any signature
   assert.match(runner,/signController\.verifyReplay\(/);
   assert.match(runner,/signController\(context\.transaction,store\.verify\(\)\.head\)/);
   assert.match(runner,/Native controller signing nonce was durably consumed/);
-  assert.match(signer,/if(prior==BBX_REPLAY_MATCHING_MARKER)return 88/);
+  assert.ok(signer.includes('if(prior==BBX_REPLAY_MATCHING_MARKER)return 88;'));
   const helper=contents('examples/mcp-macos-controller-keychain.mjs');
   assert.match(helper,/outcome\.status!==88/);
   assert.match(helper,/outcome\.stdout\.length!==0/);
