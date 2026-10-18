@@ -128,6 +128,7 @@ static inline BOOL bbx_test_verify_native_audit(
         if(!event||!mac||[mac count]!=3||
            ![mac[@"seq"] isKindOfClass:[NSNumber class]]||
            [mac[@"seq"] unsignedIntegerValue]!=i+1||
+           ![mac[@"prev"] isKindOfClass:[NSString class]]||
            ![mac[@"prev"] isEqualToString:previous]||
            !bbx_test_audit_hex(mac[@"mac"]))return NO;
         NSString *quoted=bbx_test_json_quoted_raw(raw);
@@ -154,7 +155,8 @@ static inline BOOL bbx_test_verify_native_audit(
         if(![approval isEqualToString:
              [NSString stringWithUTF8String:review->reviewId]])continue;
         NSString *source=event[@"source"];
-        if(![source isEqualToString:@"mac-transfer-synthetic"])return NO;
+        if(![source isKindOfClass:[NSString class]]||
+           ![source isEqualToString:@"mac-transfer-synthetic"])return NO;
         if([lastRule isEqualToString:@"MAC_TRANSFER_REVIEW"]){
             if(lifecycle!=0)return NO;
             lifecycle=1;
@@ -166,7 +168,10 @@ static inline BOOL bbx_test_verify_native_audit(
             lifecycle=3;
         }else if([lastRule isEqualToString:@"MAC_TRANSFER_DISPATCH_RESERVED"]){
             if(lifecycle!=3||i!=[events count]-1)return NO;
-            if(![event[@"transferTransactionId"]
+            if(![event[@"transferTransactionId"] isKindOfClass:[NSString class]]||
+               ![event[@"transferNonce"] isKindOfClass:[NSString class]]||
+               ![event[@"transferSHA256"] isKindOfClass:[NSString class]]||
+               ![event[@"transferTransactionId"]
                   isEqualToString:[NSString stringWithUTF8String:
                     review->transactionId]]||
                ![event[@"transferNonce"]
@@ -191,6 +196,7 @@ static inline BOOL bbx_test_verify_native_audit(
     if(!checkpoint||[checkpoint count]!=2||
        ![checkpoint[@"seq"] isKindOfClass:[NSNumber class]]||
        [checkpoint[@"seq"] unsignedIntegerValue]!=[events count]||
+       ![checkpoint[@"mac"] isKindOfClass:[NSString class]]||
        ![checkpoint[@"mac"] isEqualToString:previous]||
        ![previous isEqualToString:
           [NSString stringWithUTF8String:reservationMac]]||
