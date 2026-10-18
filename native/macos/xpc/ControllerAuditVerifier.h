@@ -25,8 +25,7 @@ static inline NSData *bbx_test_read_audit_member(int folder,const char *name,
     const int fd=openat(folder,name,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
     if(fd<0)return nil;
     struct stat st={0};
-    BOOL valid=fstat(fd,&st)==0&&S_ISREG(st.st_mode)&&st.st_nlink==1&&
-        st.st_uid==geteuid()&&(st.st_mode&077)!=0?NO:YES;
+    BOOL valid=fstat(fd,&st)==0;
     /* Only mode 0600 is accepted, never group/world permissions. */
     valid=valid&&S_ISREG(st.st_mode)&&st.st_nlink==1&&
           st.st_uid==geteuid()&&(st.st_mode&0777)==0600&&
