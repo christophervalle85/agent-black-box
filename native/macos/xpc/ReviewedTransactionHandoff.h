@@ -49,19 +49,13 @@ static inline bool bbx_handoff_int(const char *text,int64_t *output){
     *output=(int64_t)result;
     return true;
 }
-static inline bool bbx_read_preissued_review(FILE *source,BBXPreissuedReview *out){
-    if(!source||!out)return false;
-    char data[768];
-    size_t used=0;
-    for(;;){
-        const int next=fgetc(source);
-        if(next==EOF)break;
-        if(used>=sizeof(data)-1 || (next!='\n'&&(next<0x20||next>0x7e)))
-            return false;
-        data[used++]=(char)next;
+/* Shared bounded decoder: authenticated envelope tests use it after MAC check. */
+static inline bool bbx_parse_preissued_review(char *data,size_t used,BBXPreissuedReview *out){
+    if(!data||!out||!used||used>=768||data[used]!='\0')return false;
+    for(size_t i=0;i<used;i++){
+        const unsigned char c=(unsigned char)data[i];
+        if(c!='\n'&&(c<0x20||c>0x7e))return false;
     }
-    if(ferror(source)||!used)return false;
-    data[used]='\0';
     char *position=data;
     if(!bbx_handoff_literal(&position,"bbx-reviewed-transaction-v1\n") ||
        !bbx_handoff_literal(&position,"version=1\n"))
@@ -93,5 +87,20 @@ static inline bool bbx_read_preissued_review(FILE *source,BBXPreissuedReview *ou
         return false;
     *out=review;
     return true;
+}
+static inline bool bbx_read_preissued_review(FILE *source,BBXPreissuedReview *out){
+    if(!source||!out)return false;
+    char data[768];
+    size_t used=0;
+    for(;;){
+        const int next=fgetc(source);
+        if(next==EOF)break;
+        if(used>=sizeof(data)-1 || (next!='\n'&&(next<0x20||next>0x7e)))
+            return false;
+        data[used++]=(char)next;
+    }
+    if(ferror(source)||!used)return false;
+    data[used]='\0';
+    return bbx_parse_preissued_review(data,used,out);
 }
 #endif

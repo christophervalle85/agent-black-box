@@ -98,7 +98,17 @@ jobs:
           sed '$d' "$out/review-wire.txt" | "$out/ReviewedHandoffVector" invalid
           (cat "$out/review-wire.txt"; printf 'approved=true\n') | "$out/ReviewedHandoffVector" invalid
           echo "PASS: Native handoff envelope parser accepts only exact preissued synthetic reviewed data."
-          echo "PASS: Fourteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
+          xcrun clang "${flags[@]}" -o "$out/ReviewedAuthorityVector" native/macos/xpc/ReviewedAuthorityVector.c
+          node examples/mcp-macos-reviewed-contract-vector.mjs --auth > "$out/authority-wire.txt"
+          "$out/ReviewedAuthorityVector" valid < "$out/authority-wire.txt"
+          node examples/mcp-macos-reviewed-contract-vector.mjs --auth-bad-mac | "$out/ReviewedAuthorityVector" invalid
+          node examples/mcp-macos-reviewed-contract-vector.mjs --auth-bad-reservation | "$out/ReviewedAuthorityVector" invalid
+          node examples/mcp-macos-reviewed-contract-vector.mjs --auth-forged-review | "$out/ReviewedAuthorityVector" invalid
+          sed 's/^version=1$/version=2/' "$out/authority-wire.txt" | "$out/ReviewedAuthorityVector" invalid
+          sed '$d' "$out/authority-wire.txt" | "$out/ReviewedAuthorityVector" invalid
+          (cat "$out/authority-wire.txt"; printf 'approved=true\n') | "$out/ReviewedAuthorityVector" invalid
+          echo "PASS: Independent native HMAC contract verification rejects recomputed digest forgery; fixture key is PUBLIC, no controller authority proven."
+          echo "PASS: Fifteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
