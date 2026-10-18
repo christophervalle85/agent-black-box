@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "PeerRequirementGate.h"
+#include "ReviewedTransactionContract.h"
 
 static const unsigned char fixture[]="BBX synthetic Touch ID reviewed bytes.\n";
 static const char target[]="bbx-test-reviewed.txt";
@@ -26,9 +27,10 @@ static const char serviceID[]="dev.agentblackbox.xpc-snapshot-receipt.worker";
 #define REVIEW_LIFETIME_MS 60000
 
 typedef struct {
-    char reviewId[33];
-    char nonce[33];
+    char reviewId[37];
+    char nonce[37];
     char sha256[65];
+    char transactionId[65];
     int64_t issuedAt;
     int64_t expiresAt;
     uint64_t size;
@@ -39,15 +41,19 @@ static int64_t nowMs(void){
        t.tv_sec>INT64_MAX/1000-1)return -1;
     return (int64_t)t.tv_sec*1000+t.tv_nsec/1000000;
 }
-static void randomHex(char text[33]){
+static void randomUuid4(char text[37]){
     unsigned char random[16];
     const char digits[]="0123456789abcdef";
     arc4random_buf(random,sizeof(random));
+    random[6]=(unsigned char)((random[6]&15)|0x40);
+    random[8]=(unsigned char)((random[8]&63)|0x80);
+    size_t next=0;
     for(size_t i=0;i<sizeof(random);i++){
-        text[2*i]=digits[random[i]>>4];
-        text[2*i+1]=digits[random[i]&15];
+        if(i==4||i==6||i==8||i==10)text[next++]='-';
+        text[next++]=digits[random[i]>>4];
+        text[next++]=digits[random[i]&15];
     }
-    text[32]='\0';
+    text[36]='\0';
     if(memset_s(random,sizeof(random),0,sizeof(random))!=0)abort();
 }
 static bool hashBytes(const unsigned char *bytes,size_t count,char output[65]){
@@ -73,21 +79,31 @@ static bool reviewIsExact(const NativeReview *review){
     if(now<review->issuedAt || now>=review->expiresAt)return false;
     char actual[65];
     if(!hashBytes(fixture,sizeof(fixture)-1,actual))return false;
-    const bool match=memcmp(actual,review->sha256,65)==0;
+    char transactionId[65];
+    const bool okay=bbx_reviewed_transaction_id(
+        review->reviewId,"import",target,review->size,
+        review->sha256,review->nonce,review->issuedAt,review->expiresAt,
+        transactionId);
+    const bool match=okay && memcmp(actual,review->sha256,65)==0 &&
+        bbx_reviewed_equal_hash(transactionId,review->transactionId);
     if(memset_s(actual,sizeof(actual),0,sizeof(actual))!=0)abort();
     return match;
 }
 static bool prepareReview(NativeReview *review){
     if(!review)return false;
     memset(review,0,sizeof(*review));
-    randomHex(review->nonce);
-    randomHex(review->reviewId);
+    randomUuid4(review->nonce);
+    randomUuid4(review->reviewId);
     if(!hashBytes(fixture,sizeof(fixture)-1,review->sha256))return false;
     review->size=sizeof(fixture)-1;
     review->issuedAt=nowMs();
     if(review->issuedAt<0 || review->issuedAt>INT64_MAX-REVIEW_LIFETIME_MS)
         return false;
     review->expiresAt=review->issuedAt+REVIEW_LIFETIME_MS;
+    if(!bbx_reviewed_transaction_id(
+        review->reviewId,"import",target,review->size,
+        review->sha256,review->nonce,review->issuedAt,review->expiresAt,
+        review->transactionId))return false;
     return reviewIsExact(review);
 }
 static int authenticateReview(const NativeReview *review){
@@ -155,6 +171,8 @@ static bool statusIs(xpc_connection_t peer,const NativeReview *review,
     xpc_object_t request=xpc_dictionary_create(NULL,NULL,0);
     if(!request)return false;
     xpc_dictionary_set_string(request,"method","reviewed_snapshot_receipt");
+    xpc_dictionary_set_uint64(request,"version",BBX_REVIEWED_VERSION);
+    xpc_dictionary_set_string(request,"transactionId",review->transactionId);
     xpc_dictionary_set_string(request,"name",target);
     xpc_dictionary_set_string(request,"operation","import");
     xpc_dictionary_set_string(request,"nonce",review->nonce);

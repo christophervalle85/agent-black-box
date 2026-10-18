@@ -46,6 +46,10 @@ test('native host owns authentication and worker validates exact reviewed receip
     'statusIs(peer,&review,changed,sizeof(changed)',
     'statusIs(peer,&review,fixture,sizeof(fixture)-1,"ACCEPTED")',
     'statusIs(peer,&review,fixture,sizeof(fixture)-1,"REPLAY")',
+    'xpc_dictionary_set_uint64(request,"version",BBX_REVIEWED_VERSION)',
+    'xpc_dictionary_set_string(request,"transactionId",review->transactionId)',
+    'randomUuid4(review->nonce)',
+    'randomUuid4(review->reviewId)',
     'memset_s(changed'
   ])assert.ok(host.includes(requirement),requirement);
   assert.ok(host.includes('const NativeReview committed=review;'));
@@ -58,11 +62,14 @@ test('native host owns authentication and worker validates exact reviewed receip
     assert.equal(host.includes(prohibited),false,prohibited);
   for(const requirement of [
     '#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT',
-    'return valid && count==10',
+    'return valid && count==12',
     'strcmp(method,"reviewed_snapshot_receipt")',
     'statedSize!=count',
-    'expires!=issued+60000',
+    'bbx_reviewed_transaction_id(',
+    'bbx_reviewed_equal_hash(expectedId,transactionId)',
     'now<issued || now>=expires',
+    'xpc_dictionary_get_uint64(message,"version")',
+    'xpc_dictionary_get_string(message,"transactionId")',
     'DIGEST_MISMATCH','REPLAY'
   ])assert.ok(worker.includes(requirement),requirement);
   for(const requirement of [

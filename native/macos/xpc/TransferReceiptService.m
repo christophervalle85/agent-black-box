@@ -15,6 +15,7 @@
 #ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
 #include <time.h>
 #include <limits.h>
+#include "ReviewedTransactionContract.h"
 #endif
 #ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
 #include <unistd.h>
@@ -27,7 +28,7 @@
 #define BBX_MAX_NONCES 64
 
 static dispatch_queue_t nonceQueue;
-static char seen[BBX_MAX_NONCES][33];
+static char seen[BBX_MAX_NONCES][37];
 static size_t seenCount=0;
 #ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
 /* ONLY the signed, disposable on-Mac inbound-peer test includes this.
@@ -68,14 +69,16 @@ static bool exactKeys(xpc_object_t request){
            strcmp(key,"reviewId")!=0 &&
            strcmp(key,"byteLength")!=0 &&
            strcmp(key,"issuedAt")!=0 &&
-           strcmp(key,"expiresAt")!=0
+           strcmp(key,"expiresAt")!=0 &&
+           strcmp(key,"version")!=0 &&
+           strcmp(key,"transactionId")!=0
 #endif
            )valid=false;
         count++;
         return true;
     });
 #ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
-    return valid && count==10;
+    return valid && count==12;
 #else
     return valid && count==5;
 #endif
@@ -118,6 +121,8 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
        || !isType(message,"byteLength",XPC_TYPE_UINT64)
        || !isType(message,"issuedAt",XPC_TYPE_INT64)
        || !isType(message,"expiresAt",XPC_TYPE_INT64)
+       || !isType(message,"version",XPC_TYPE_UINT64)
+       || !isType(message,"transactionId",XPC_TYPE_STRING)
 #endif
        ){
         respond(peer,message,"BAD_REQUEST");
@@ -135,7 +140,13 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
 #else
        strcmp(method,"snapshot_receipt")!=0 ||
 #endif
-       !testName(name) || !lowerHex(nonce,32) || !lowerHex(sha,64) ||
+       !testName(name) ||
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+       !bbx_reviewed_uuid4(nonce) ||
+#else
+       !lowerHex(nonce,32) ||
+#endif
+       !lowerHex(sha,64) ||
        count<1 || count>BBX_MAX_PAYLOAD || !bytes){
         respond(peer,message,"BAD_REQUEST");
         return;
@@ -146,9 +157,16 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
     const uint64_t statedSize=xpc_dictionary_get_uint64(message,"byteLength");
     const int64_t issued=xpc_dictionary_get_int64(message,"issuedAt");
     const int64_t expires=xpc_dictionary_get_int64(message,"expiresAt");
-    if(!operation || strcmp(operation,"import")!=0 ||
-       !lowerHex(reviewId,32) || statedSize!=count ||
-       issued<0 || issued>INT64_MAX-60000 || expires!=issued+60000){
+    const uint64_t version=xpc_dictionary_get_uint64(message,"version");
+    const char *transactionId=xpc_dictionary_get_string(message,"transactionId");
+    char expectedId[65];
+    if(version!=BBX_REVIEWED_VERSION ||
+       !operation || strcmp(operation,"import")!=0 ||
+       statedSize!=count ||
+       !bbx_reviewed_transaction_id(
+           reviewId,operation,name,statedSize,sha,nonce,issued,expires,
+           expectedId) ||
+       !bbx_reviewed_equal_hash(expectedId,transactionId)){
         respond(peer,message,"BAD_REQUEST");
         return;
     }
@@ -177,7 +195,11 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
             status="CAPACITY_EXHAUSTED";
             return;
         }
+#ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+        memcpy(seen[seenCount],nonce,37);
+#else
         memcpy(seen[seenCount],nonce,33);
+#endif
         seenCount++;
         status="ACCEPTED";
     });

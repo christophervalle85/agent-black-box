@@ -6,6 +6,7 @@
  */
 import {randomUUID} from 'node:crypto';
 import {createMacTransferReviewPair} from './macos-transfer-review.mjs';
+import {createCanonicalMacReviewedTransaction} from './macos-reviewed-transaction.mjs';
 
 export function createAuditedMacTransferController({
   store,clock=Date.now,syntheticTransport=null,syntheticTimeoutMs=5000
@@ -46,9 +47,14 @@ export function createAuditedMacTransferController({
     audit(review,'MAC_TRANSFER_DISPATCH_ATTEMPT','review','pending',
       'Synthetic dispatch staging requested; no native file operation.');
     // This call burns the approval even when bytes or metadata are wrong.
-    let snapshot;
+    let snapshot,transaction;
     try {
       queue.host.consume({reviewId,intent,bytes});
+      // The data identity is derived from the ORIGINAL trusted review,
+      // not attacker-supplied transaction fields or a new nonce.
+      transaction=createCanonicalMacReviewedTransaction(review,{
+        now:clock()
+      });
       snapshot=Buffer.from(bytes);
     } catch {
       audit(review,'MAC_TRANSFER_DISPATCH_VALIDATION_DENIED','block','blocked',
@@ -66,7 +72,7 @@ export function createAuditedMacTransferController({
       throw Error('Synthetic dispatch reservation audit failed; no dispatch.');
     }
     const context=Object.freeze({
-      reviewId:review.reviewId,intent:review.intent,bytes:snapshot
+      reviewId:review.reviewId,intent:review.intent,transaction,bytes:snapshot
     });
     let outcome;
     let expired=false;

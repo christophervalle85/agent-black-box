@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {AuditStore} from '../src/audit.mjs';
 import {createMacTransferIntent} from '../src/macos-transfer-intent.mjs';
 import {createAuditedMacTransferController} from '../src/macos-transfer-controller.mjs';
+import {assertCanonicalMacReviewedTransaction} from '../src/macos-reviewed-transaction.mjs';
 
 const NOW=1_790_000_000_000;
 const bytes=()=>Buffer.from('BBX audited synthetic dispatch bytes.\n');
@@ -56,6 +57,13 @@ test('HMAC durable reserve, one-use synthetic callback, verified final receipt',
     assert.equal(Object.isFrozen(context.intent),true);
     assert.equal(context.bytes.equals(bytes()),true);
     assert.equal(context.reviewId.length,36);
+    assert.equal(Object.isFrozen(context.transaction),true);
+    assert.equal(context.transaction.reviewId,context.reviewId);
+    assert.equal(context.transaction.nonce,context.intent.nonce);
+    assert.equal(context.transaction.sha256,context.intent.sha256);
+    assert.equal(context.transaction.noteName,context.intent.noteName);
+    assert.deepEqual(assertCanonicalMacReviewedTransaction(
+      context.transaction,{now:NOW}),context.transaction);
     return 'SYNTHETIC_ACCEPTED';
   }
 },async({real,controller,review,intent})=>{
