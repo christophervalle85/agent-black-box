@@ -214,3 +214,23 @@ To minimize Keychain authorization prompts, `all` signs the same disposable nest
     MCP_SANDBOX=off npm run mcp:mac-xpc-native-reviewed -- all
 
 Expected order: **expired** (no Touch ID), **approved** (explicitly approve the Touch ID request), and **cancel** (explicitly click Cancel, not fingerprint authentication). For Keychain private-key access prompts *before* the native review test, verify they are for `codesign` and the expected Apple Development key, then click **Allow**. Keychain `Allow` and Touch ID approval are different actions with different meanings. The combined command does not grant new OS file permissions, and the real-Mac result remains PENDING until actually executed.
+
+## October 17, 2026 — real Mac native Touch ID–reviewed signed XPC receipt ACCEPTED
+
+The operator executed the combined on-device test after commit `f38c534b9b61fdb5ae2f3ca1d5c92d0374ae3b00`:
+
+    MCP_SANDBOX=off npm run mcp:mac-xpc-native-reviewed -- all
+
+**PASS — signed host and worker:** Apple Development-signed native Touch ID host and sandboxed XPC worker were verified with matching Team IDs.
+
+**PASS — expired:** The fixed synthetic review was rejected before biometric prompt or XPC dispatch. The harness printed `PASS: Expired synthetic native review denied before biometric prompt or XPC dispatch.`
+
+**PASS — biometric approved:** After the operator approved the real macOS Touch ID prompt, the native signed host dispatched the in-binary synthetic reviewed payload. Worker returned expected digest-mismatch for changed bytes, accepted the exact reviewed bytes once, and rejected the repeated nonce. Harness printed `PASS: Native biometric approval permitted exact bytes once; altered bytes and replay were denied by the signed XPC worker.`
+
+**PASS — biometric cancelled:** After the operator chose Cancel in the Touch ID prompt, the signed native host refused XPC dispatch. Harness printed `PASS: Explicit user cancellation blocked XPC dispatch within the signed native host.`
+
+**Acceptance status: PASS (3/3 test modes on real Mac).** This demonstrates the local native biometric decision gating the experimental transport plus payload/replay checks. It does NOT demonstrate a production user-consent flow, independent audited approval, selected-file transfer, durable nonce consumption, rollback recovery, or MCP read authorization. The worker currently trusts the verified host to have performed LocalAuthentication and its own review construction. The reviewed synthetic fixture is compiled into that host; no personal documents, selected file descriptors, or arbitrary bytes were imported or exported. The development signing and test-only macro do not authorize production operations. `MCP_SANDBOX=required` remains fail-closed.
+
+**Next boundary — not yet accepted:** Integrate the HMAC-verified audit and single-use trusted approval controller with the native host review/dispatch transaction. Define an accountable handoff that cannot be self-declared by a model or presented as an unverified bearer-token/boolean; ensure cancellation, expiry, changed bytes, replay, audit failures and uncertain native worker outcomes fail closed and are auditable. The eventual file-descriptor snapshot must be bound to exactly the bytes reviewed and authenticated, while preserving the current absence of any arbitrary file operations.
+
+The trailing npm major-version update notice in the operator's console was advisory and did not affect native test acceptance.
