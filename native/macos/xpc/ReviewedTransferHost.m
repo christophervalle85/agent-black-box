@@ -23,6 +23,9 @@
 #ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
 #include "ReviewedTransactionHandoff.h"
 #endif
+#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+#include "ReviewedTransactionSignedAuthority.h"
+#endif
 
 static const unsigned char fixture[]="BBX synthetic Touch ID reviewed bytes.\n";
 static const char target[]="bbx-test-reviewed.txt";
@@ -113,6 +116,22 @@ static bool prepareReview(NativeReview *review){
 static bool importPreissuedReview(NativeReview *out){
     BBXPreissuedReview preissued={0};
     if(!bbx_read_preissued_review(stdin,&preissued))return false;
+    memset(out,0,sizeof(*out));
+    memcpy(out->reviewId,preissued.reviewId,sizeof(out->reviewId));
+    memcpy(out->nonce,preissued.nonce,sizeof(out->nonce));
+    memcpy(out->sha256,preissued.sha256,sizeof(out->sha256));
+    memcpy(out->transactionId,preissued.transactionId,sizeof(out->transactionId));
+    out->issuedAt=preissued.issuedAt;
+    out->expiresAt=preissued.expiresAt;
+    out->size=preissued.byteLength;
+    return reviewIsExact(out);
+}
+#endif
+
+#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+static bool importSignedPreissuedReview(NativeReview *out){
+    BBXPreissuedReview preissued={0};
+    if(!bbx_read_signed_preissued_review(stdin,&preissued))return false;
     memset(out,0,sizeof(*out));
     memcpy(out->reviewId,preissued.reviewId,sizeof(out->reviewId));
     memcpy(out->nonce,preissued.nonce,sizeof(out->nonce));
@@ -250,6 +269,10 @@ int main(int argc,const char *argv[]){
                    && strcmp(argv[1],"handoff-approved")!=0 &&
                    strcmp(argv[1],"handoff-invalid")!=0
 #endif
+#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+                   && strcmp(argv[1],"handoff-rsa-approved")!=0 &&
+                   strcmp(argv[1],"handoff-rsa-invalid")!=0
+#endif
                    )){
         puts("BBX_REVIEWED_XPC_BAD_ARGS");
         return 90;
@@ -258,15 +281,29 @@ int main(int argc,const char *argv[]){
 #ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
     const bool external=strncmp(argv[1],"handoff-",8)==0;
     if(external){
-        // Validation is STRICTLY before any LocalAuthentication prompt or
-        // worker connection. This stream alone is NOT trusted approval.
+        // Validated entirely before Touch ID or XPC. The RSA public key is
+        // embedded before signing the diagnostic native app, not in stdin.
+#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+        const bool rsa=strncmp(argv[1],"handoff-rsa-",12)==0;
+        const bool valid=rsa?importSignedPreissuedReview(&review):
+                             importPreissuedReview(&review);
+        const bool negative=strcmp(argv[1],"handoff-invalid")==0 ||
+                            strcmp(argv[1],"handoff-rsa-invalid")==0;
+#else
         const bool valid=importPreissuedReview(&review);
-        if(strcmp(argv[1],"handoff-invalid")==0){
+        const bool negative=strcmp(argv[1],"handoff-invalid")==0;
+#endif
+        if(negative){
             if(valid){
                 puts("BBX_REVIEWED_XPC_UNEXPECTED_VALID_HANDOFF");
                 return 87;
             }
+#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+            puts(rsa?"BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC":
+                     "BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC");
+#else
             puts("BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC");
+#endif
             return 0;
         }
         if(!valid){
@@ -350,6 +387,12 @@ int main(int argc,const char *argv[]){
 #ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
     if(strcmp(argv[1],"handoff-approved")==0){
         puts("BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED");
+        return 0;
+    }
+#endif
+#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+    if(strcmp(argv[1],"handoff-rsa-approved")==0){
+        puts("BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED");
         return 0;
     }
 #endif
