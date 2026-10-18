@@ -1,4 +1,4 @@
-/* Separate native-process durable nonce receipt test; no XPC/UI/files. */
+/* Separate native-process durable nonce receipt test; no XPC/UI/user files. */
 #include "ReviewedDurableReplay.h"
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +34,18 @@ int main(int argc,char **argv){
     }else if(strcmp(argv[1],"loose-dir")==0){
         expected=BBX_REPLAY_STORE_DENIED;
         observed=bbx_reviewed_replay_reserve(dir,nonce,id);
+    }else if(strcmp(argv[1],"symlink-marker")==0){
+        expected=BBX_REPLAY_ALREADY_SPENT;
+        observed=bbx_reviewed_replay_reserve(dir,
+                 "00000000-0000-4000-8000-000000000000",id);
+    }else if(strcmp(argv[1],"race")==0){
+        observed=bbx_reviewed_replay_reserve(dir,
+                 "123e4567-e89b-42d3-a456-426614174000",id);
+        if(close(dir)!=0 || (observed!=BBX_REPLAY_FRESH_COMMITTED &&
+                             observed!=BBX_REPLAY_ALREADY_SPENT))return 87;
+        puts(observed==BBX_REPLAY_FRESH_COMMITTED
+            ?"BBX_DURABLE_NATIVE_FRESH":"BBX_DURABLE_NATIVE_REPLAY");
+        return 0;
     }else{
         close(dir);return 90;
     }
