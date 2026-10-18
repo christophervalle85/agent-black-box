@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include "ReviewedDurableReplay.h"
+#include "ReviewedDurableReplayDirectory.h"
 #endif
 #ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
 #include <time.h>
@@ -124,44 +125,6 @@ static void respond(xpc_connection_t peer,xpc_object_t message,const char *statu
     xpc_connection_send_message(peer,reply);
     xpc_release(reply);
 }
-#ifdef BBX_TEST_DURABLE_REPLAY
-/*
- * Private worker App Sandbox Documents container, never a path from IPC.
- * The ordinary receipt build never opens or writes any filesystem storage.
- */
-static int bbx_replay_directory(void){
-    @autoreleasepool {
-        NSError *error=nil;
-        NSURL *documents=[[NSFileManager defaultManager]
-            URLForDirectory:NSDocumentDirectory
-            inDomain:NSUserDomainMask
-            appropriateForURL:nil create:YES error:&error];
-        if(!documents)return -1;
-        const char *path=[documents fileSystemRepresentation];
-        if(!path || !strstr(path,"/Library/Containers/") ||
-           !strstr(path,"/Data/Documents"))return -1;
-        const int parent=open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-        if(parent<0)return -1;
-        if(mkdirat(parent,"AgentBlackBoxReviewedReplay",0700)<0){
-            if(errno!=EEXIST){close(parent);return -1;}
-        }else if(fsync(parent)!=0){
-            close(parent);
-            return -1;
-        }
-        const int directory=openat(parent,"AgentBlackBoxReviewedReplay",
-                                   O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-        close(parent);
-        if(directory<0)return -1;
-        struct stat info={0};
-        if(fstat(directory,&info)!=0 || !S_ISDIR(info.st_mode) ||
-           info.st_uid!=geteuid() || (info.st_mode&077)!=0){
-            close(directory);
-            return -1;
-        }
-        return directory;
-    }
-}
-#endif
 static void handle(xpc_connection_t peer,xpc_object_t message){
     if(!exactKeys(message) ||
        !isType(message,"method",XPC_TYPE_STRING) ||
