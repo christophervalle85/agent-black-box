@@ -165,3 +165,32 @@ test('denied signer biometric cannot be replaced by a forged success or native X
   assert.match(runner,/No unconsumed/);
   assert.match(runner,/choose Cancel\. Do NOT approve/);
 });
+
+
+test('native Keychain controller consumes one durable nonce before any signature',()=>{
+  const signer=contents('native/macos/xpc/KeychainControllerSigner.m');
+  const ledger=contents('native/macos/xpc/ControllerSigningReservation.h');
+  const runner=contents('examples/mcp-macos-xpc-native-reviewed.mjs');
+  assert.match(signer,/#include "ControllerSigningReservation\.h"/);
+  assert.match(signer,/bbx_reviewed_replay_observe\(\s*beforeDir,review\.nonce,review\.transactionId\)/);
+  assert.match(signer,/prior!=BBX_REPLAY_NO_MARKER/);
+  assert.match(signer,/bbx_reviewed_replay_reserve\(\s*signingDir,review\.nonce,review\.transactionId\)/);
+  assert.match(signer,/reserved!=BBX_REPLAY_FRESH_COMMITTED/);
+  assert.ok(signer.indexOf('if(!approveExactlyReviewedSyntheticTransaction(&review))return 87;') <
+    signer.indexOf('bbx_reviewed_replay_reserve('));
+  assert.ok(signer.indexOf('bbx_reviewed_replay_reserve(') <
+    signer.indexOf('SecKeyCreateSignature('));
+  assert.match(ledger,/O_RDONLY\|O_DIRECTORY\|O_NOFOLLOW\|O_CLOEXEC/);
+  assert.match(ledger,/NSHomeDirectory\(\)/);
+  assert.match(ledger,/Application Support/);
+  assert.match(ledger,/ControllerSigning/);
+  assert.match(ledger,/st\.st_uid!=geteuid\(\)/);
+  assert.match(ledger,/st\.st_mode&077/);
+  assert.match(ledger,/bbx_test_open_signing_subfolder/);
+  assert.doesNotMatch(ledger,/unlink(at)?\s*\(/);
+  assert.match(runner,/let signerReplayDenied=false/);
+  assert.match(runner,/Native signer reissued a consumed review/);
+  assert.match(runner,/signController\(context\.transaction,store\.verify\(\)\.head\)/);
+  assert.match(runner,/Native controller signing nonce was durably consumed/);
+  assert.doesNotMatch(signer,/SecKeyCopyExternalRepresentation\(privateKey/);
+});
