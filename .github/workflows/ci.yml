@@ -110,12 +110,13 @@ jobs:
           echo "PASS: Independent native HMAC contract verification rejects recomputed digest forgery; fixture key is PUBLIC, no controller authority proven."
           node examples/mcp-macos-reviewed-rsa-vector.mjs "$out"
           xcrun clang "${flags[@]}" -I"$out" -o "$out/ReviewedSignedAuthorityVector" native/macos/xpc/ReviewedSignedAuthorityVector.c -framework Security
+          xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -o "$out/ReviewedSignedTransferHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
           "$out/ReviewedSignedAuthorityVector" valid < "$out/rsa-valid.txt"
           for input in rsa-bad-signature rsa-bad-reservation rsa-forged-review rsa-other-controller rsa-truncated rsa-extra-field; do
             "$out/ReviewedSignedAuthorityVector" invalid < "$out/$input.txt"
           done
           echo "PASS: Pinned RSA-PSS native verifier rejected another signing key, forged review, and modified reservation."
-          echo "PASS: Sixteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
+          echo "PASS: Seventeen native fixture executables compiled with Apple's SDK, including RSA-pinned signed-host test mode; no GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
