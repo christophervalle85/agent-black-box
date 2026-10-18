@@ -150,3 +150,18 @@ test('combined Keychain suite exercises independent reviews with durable restart
   assert.match(ci,/BBX_TEST_KEYCHAIN_FULL_SUITE=1/);
   assert.ok(ci.includes('no Keychain identity created on CI'));
 });
+
+test('denied signer biometric cannot be replaced by a forged success or native XPC launch',()=>{
+  const runner=contents('examples/mcp-macos-xpc-native-reviewed.mjs');
+  assert.match(runner,/mode==='handoff-rsa-keychain-deny'/);
+  assert.match(runner,/if\(denyController&&typeof signController!=='function'\)/);
+  assert.match(runner,/consentUnexpectedlyGranted=true/);
+  assert.match(runner,/nativeHostLaunchCount\+\+/);
+  assert.ok(runner.indexOf('if(denyController){\n        // An actual signature') <
+    runner.indexOf('nativeHostLaunchCount++'));
+  assert.match(runner,/if\(!uncertain\|\|consentUnexpectedlyGranted\|\|nativeHostLaunchCount!==0\|\|/);
+  assert.match(runner,/audit\.hasUncertainDispatch!==true/);
+  assert.match(runner,/verdict\?\.canRetry!==false/);
+  assert.match(runner,/No unconsumed/);
+  assert.match(runner,/choose Cancel\. Do NOT approve/);
+});
