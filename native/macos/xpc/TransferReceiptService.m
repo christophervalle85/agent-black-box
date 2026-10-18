@@ -32,9 +32,6 @@
 #ifdef BBX_TEST_DURABLE_WORKER_RESTART
 #include "ReviewedWorkerRestartTest.h"
 #endif
-#ifdef BBX_TEST_CRASH_RECONCILE
-#include "ReviewedCrashReconcileTest.h"
-#endif
 #ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
 #include <time.h>
 #include <limits.h>
@@ -51,6 +48,9 @@
 #define BBX_MAX_NONCES 64
 
 static dispatch_queue_t nonceQueue;
+#ifdef BBX_TEST_CRASH_RECONCILE
+#include "ReviewedCrashReconcileTest.h"
+#endif
 static char seen[BBX_MAX_NONCES][37];
 static size_t seenCount=0;
 #ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
