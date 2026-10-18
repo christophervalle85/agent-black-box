@@ -61,8 +61,10 @@ test('real-native review receipt requires matching review ID, intent nonce and f
   assert.throws(()=>assessNativeMacTransferTouchId(r,null,{now}));
 });
 test('review verifier cannot claim Linux mock callbacks are native macOS OS evidence',async()=>{
+  // Keep the fixture's original issuance clock: the purpose of this test
+  // is platform/native helper evidence, not the intentionally short expiry.
   await assert.rejects(()=>evaluateNativeMacTransferTouchId(review(),{
-    executable:'/tmp/not-a-native-auth-fixture'
+    executable:'/tmp/not-a-native-auth-fixture',now:()=>now
   }),process.platform==='darwin'?/Native Touch ID helper failed/:/Real macOS required/);
 });
 test('real macOS helper uses biometric-only policy, an exact review and no arbitrary paths',()=>{
