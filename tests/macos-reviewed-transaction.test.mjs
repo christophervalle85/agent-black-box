@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {
   createCanonicalMacReviewedTransaction,
   assertCanonicalMacReviewedTransaction,
+  encodeCanonicalMacReviewedHandoff,
   MAC_REVIEWED_TRANSACTION_DOMAIN
 } from '../src/macos-reviewed-transaction.mjs';
 import {
@@ -100,4 +101,33 @@ test('fixed canonical hash is DATA equality, not operator approval',()=>{
   assert.equal('signature' in tx,false);
   assert.equal('auditMac' in tx,false);
   assert.equal('credential' in tx,false);
+});
+
+test('canonical stdin envelope is strict ASCII and cannot supply approval',()=>{
+  const tx=base();
+  const wire=encodeCanonicalMacReviewedHandoff(tx,{now:FIXED_ISSUED});
+  const expected=[
+    'bbx-reviewed-transaction-v1',
+    'version=1',
+    'reviewId='+tx.reviewId,
+    'operation=import',
+    'noteName=bbx-test-reviewed.txt',
+    'byteLength=39',
+    'sha256='+tx.sha256,
+    'nonce='+tx.nonce,
+    'issuedAt='+tx.issuedAt,
+    'expiresAt='+tx.expiresAt,
+    'transactionId='+tx.transactionId,
+    ''
+  ].join('\\n').replaceAll('\\n','\n');
+  assert.equal(wire.toString('ascii'),expected);
+  assert.equal(wire.toString('ascii').includes('approved='),false);
+  assert.equal(wire.toString('ascii').includes('bearer='),false);
+  assert.equal(wire.toString('ascii').includes('filePath='),false);
+  for(const altered of [
+    {...tx,transactionId:'0'.repeat(64)}, {...tx,extra:'model-supplied'},
+    {...tx,noteName:'bbx-test-other.txt'}
+  ])assert.throws(()=>encodeCanonicalMacReviewedHandoff(altered,{
+    now:FIXED_ISSUED
+  }));
 });

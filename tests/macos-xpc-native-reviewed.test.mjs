@@ -88,5 +88,16 @@ test('native host owns authentication and worker validates exact reviewed receip
   assert.ok(runner.includes('assessNativeReviewedXpc(check,outcome)'));
   assert.ok(runner.includes("INSTRUCTION: At the native Touch ID prompt, choose Cancel"));
   assert.ok(!runner.includes('createBlackBoxServer'));
-  assert.ok(!runner.includes('createAuditedMacTransferController'));
+  assert.ok(runner.includes('createAuditedMacTransferController'));
+  assert.ok(runner.includes('MAC_TRANSFER_DISPATCH_RESERVED'));
+  assert.ok(runner.includes('SYNTHETIC_ACCEPTED'));
+  assert.ok(runner.includes("['handoff-approved']"));
+  assert.ok(runner.includes("['handoff-invalid']"));
+  assert.ok(runner.includes('await auditedHandoff(host,temp)'));
+  assert.ok(runner.includes("'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED"));
+  assert.ok(host.includes('#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF'));
+  assert.ok(host.includes('bbx_read_preissued_review(stdin,&preissued)'));
+  assert.ok(host.indexOf('const bool valid=importPreissuedReview(&review);') <
+    host.indexOf('const int auth=authenticateReview(&review);'));
+  assert.ok(host.includes('BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC'));
 });

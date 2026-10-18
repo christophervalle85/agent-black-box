@@ -87,3 +87,20 @@ export function assertCanonicalMacReviewedTransaction(candidate,{now=Date.now()}
     throw Error('Canonical transaction identifier mismatch.');
   return expected;
 }
+
+/**
+ * Strict ASCII wire envelope for one preissued synthetic review. The bytes
+ * are DATA, not an HMAC or a bearer authorization. The only intended sender
+ * is the trusted local test harness; native must check all fields again.
+ */
+export function encodeCanonicalMacReviewedHandoff(candidate,{now=Date.now()}={}){
+  const tx=assertCanonicalMacReviewedTransaction(candidate,{now});
+  return Buffer.concat([
+    encodeCanonicalMacReviewedTransaction({
+      version:tx.version,reviewId:tx.reviewId,operation:tx.operation,
+      noteName:tx.noteName,byteLength:tx.byteLength,sha256:tx.sha256,
+      nonce:tx.nonce,issuedAt:tx.issuedAt,expiresAt:tx.expiresAt
+    }),
+    Buffer.from('transactionId='+tx.transactionId+'\n','ascii')
+  ]);
+}

@@ -73,7 +73,7 @@ jobs:
           xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -o "$out/SignedTransferReceiptWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
           xcrun clang "${flags[@]}" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -o "$out/SignedInboundHost" native/macos/xpc/SignedInboundHost.c
           xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_SIGNED_INBOUND_EVIDENCE=1 -o "$out/SignedInboundWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
-          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -o "$out/ReviewedTransferHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication
+          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -o "$out/ReviewedTransferHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication
           xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -o "$out/ReviewedTransferWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
           xcrun clang "${flags[@]}" -o "$out/ReviewedTransactionVector" native/macos/xpc/ReviewedTransactionVector.c
           native_tx=$("$out/ReviewedTransactionVector")

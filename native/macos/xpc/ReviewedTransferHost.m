@@ -20,6 +20,9 @@
 #include <string.h>
 #include "PeerRequirementGate.h"
 #include "ReviewedTransactionContract.h"
+#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
+#include "ReviewedTransactionHandoff.h"
+#endif
 
 static const unsigned char fixture[]="BBX synthetic Touch ID reviewed bytes.\n";
 static const char target[]="bbx-test-reviewed.txt";
@@ -106,6 +109,22 @@ static bool prepareReview(NativeReview *review){
         review->transactionId))return false;
     return reviewIsExact(review);
 }
+#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
+static bool importPreissuedReview(NativeReview *out){
+    BBXPreissuedReview preissued={0};
+    if(!bbx_read_preissued_review(stdin,&preissued))return false;
+    memset(out,0,sizeof(*out));
+    memcpy(out->reviewId,preissued.reviewId,sizeof(out->reviewId));
+    memcpy(out->nonce,preissued.nonce,sizeof(out->nonce));
+    memcpy(out->sha256,preissued.sha256,sizeof(out->sha256));
+    memcpy(out->transactionId,preissued.transactionId,sizeof(out->transactionId));
+    out->issuedAt=preissued.issuedAt;
+    out->expiresAt=preissued.expiresAt;
+    out->size=preissued.byteLength;
+    return reviewIsExact(out);
+}
+#endif
+
 static int authenticateReview(const NativeReview *review){
     @autoreleasepool {
         if(!reviewIsExact(review))return 87;
@@ -226,11 +245,36 @@ static bool statusIs(xpc_connection_t peer,const NativeReview *review,
 int main(int argc,const char *argv[]){
     if(argc!=2 || (strcmp(argv[1],"approved")!=0 &&
                    strcmp(argv[1],"cancel")!=0 &&
-                   strcmp(argv[1],"expired")!=0)){
+                   strcmp(argv[1],"expired")!=0
+#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
+                   && strcmp(argv[1],"handoff-approved")!=0 &&
+                   strcmp(argv[1],"handoff-invalid")!=0
+#endif
+                   )){
         puts("BBX_REVIEWED_XPC_BAD_ARGS");
         return 90;
     }
     NativeReview review;
+#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
+    const bool external=strncmp(argv[1],"handoff-",8)==0;
+    if(external){
+        // Validation is STRICTLY before any LocalAuthentication prompt or
+        // worker connection. This stream alone is NOT trusted approval.
+        const bool valid=importPreissuedReview(&review);
+        if(strcmp(argv[1],"handoff-invalid")==0){
+            if(valid){
+                puts("BBX_REVIEWED_XPC_UNEXPECTED_VALID_HANDOFF");
+                return 87;
+            }
+            puts("BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC");
+            return 0;
+        }
+        if(!valid){
+            puts("BBX_REVIEWED_XPC_HANDOFF_DENIED");
+            return 87;
+        }
+    }else
+#endif
     if(!prepareReview(&review)){
         puts("BBX_REVIEWED_XPC_SETUP_DENIED");
         return 87;
@@ -303,6 +347,12 @@ int main(int argc,const char *argv[]){
         puts("BBX_REVIEWED_XPC_TRANSACTION_NOT_ACCEPTED");
         return 87;
     }
+#ifdef BBX_TEST_EXTERNAL_REVIEW_HANDOFF
+    if(strcmp(argv[1],"handoff-approved")==0){
+        puts("BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED");
+        return 0;
+    }
+#endif
     puts("BBX_REVIEWED_XPC_TOUCHID_APPROVED_TAMPER_REPLAY_BLOCKED");
     return 0;
 }
