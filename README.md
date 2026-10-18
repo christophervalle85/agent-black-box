@@ -4,6 +4,12 @@
 
 ![Status](https://img.shields.io/badge/branch-v0.8--dev-yellow) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
+## Development guidance — current milestone and next steps
+
+**Working on v0.8? Start with the [Development Guidance and milestone tracker](docs/DEVELOPMENT_GUIDANCE_V08.md).** It distinguishes real-Mac signed-XPC/Touch ID acceptances from simulated HMAC dispatch and the unfinished native handoff, lists safe testing commands, and defines the next security acceptance gates.
+
+**Current next milestone:** one immutable reviewed transaction across the HMAC-audited controller and native Touch ID/XPC host. This is **not implemented end to end**, and production document transfers remain disabled. The active work stays on `feature/v0.8-native-transfers`; `main` is unchanged.
+
 ## Quick start
 
 **Requirements:** Node.js 22+ for the web application; [Ollama](https://ollama.com/download) for the real AI agent. The scripted demo works even without Ollama.
@@ -228,10 +234,9 @@ The repo has test coverage for the message protocol and approval guard using *mo
 
 ## What to build next
 
-1. Validate the approval workflow locally against Ollama (mocked integration tests pass, but real model behavior may vary).
-2. Real MCP mediating client/server with per-tool schemas, auth, and permissions.
-3. Stronger security boundaries: hardened filesystem reads, cryptographically verifiable logs, identity, sandboxing and robust sensitive-data handling.
-4. Rich run histories, per-agent timelines and container deployment.
+For the **active v0.8 native-security work**, follow the [Development Guidance and acceptance roadmap](docs/DEVELOPMENT_GUIDANCE_V08.md): define the single authoritative review/nonce schema, build the authenticated HMAC-to-native handoff, handle uncertain outcomes without retry, and only then consider selected synthetic file bytes or release gating.
+
+Longer-term product work includes real-model usability validation, richer run histories, cross-platform isolation research and deployment hardening; none of those substitutes for v0.8's native security gates.
 
 ## Security / privacy
 
