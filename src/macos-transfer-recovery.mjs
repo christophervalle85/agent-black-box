@@ -102,3 +102,35 @@ export function inspectMacSyntheticDispatchRecovery(store){
     dispatches:Object.freeze(results)
   });
 }
+
+/*
+ * Correlate an explicitly observed native TEST-WORKER marker with a verified
+ * HMAC-audit UNCERTAIN reservation. The observation is data supplied by the
+ * caller, not a signed claim; only the test harness may source it from the
+ * actual OS-signed worker's exact evidence response. Never produce a grant,
+ * a success verdict, a retry instruction or a persisted audit modification.
+ */
+export function classifyMacSyntheticUncertainReceipt(report,{
+  reviewId,observation
+}={}){
+  if(!report || !Array.isArray(report.dispatches) ||
+     !UUID.test(reviewId))throw Error('Verified synthetic recovery report required.');
+  const target=report.dispatches.filter(
+    item=>item?.reviewId===reviewId&&item.status==='unknown'&&
+          item.canRetry===false
+  );
+  if(target.length!==1)
+    throw Error('RECOVERY REQUIRED: no unique uncertain reserved review.');
+  const meaning=Object.freeze({
+    'matching-marker':'Native synthetic nonce marker matches the transaction, but no controller acknowledgment exists.',
+    'no-marker':'No nonce marker observed in the worker container snapshot; execution absence is NOT proven.',
+    unverifiable:'Native receipt evidence is invalid or unavailable; outcome remains unknown.'
+  });
+  if(!Object.hasOwn(meaning,observation))
+    throw Error('Unsupported native synthetic recovery evidence.');
+  return Object.freeze({
+    reviewId,observation,status:'unknown',
+    canRetry:false,canClaimSuccess:false,
+    description:meaning[observation]
+  });
+}
