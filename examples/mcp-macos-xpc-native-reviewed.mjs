@@ -118,6 +118,7 @@ async function auditedHandoff(host,dir,{
   let callbackCount=0;
   let signedCommittedWire=null;
   let nativeCrashVerified=false;
+  let checkedGenuineKeychainMutation=false;
   const controller=createAuditedMacTransferController({
     store,clock:Date.now,syntheticTimeoutMs:30000,
     syntheticTransport:context=>{
@@ -132,6 +133,27 @@ async function auditedHandoff(host,dir,{
           privateKey,reservationMac:store.verify().head
         }):encodeCanonicalMacReviewedHandoff(context.transaction);
       if(durable)signedCommittedWire=Buffer.from(wire);
+      if(signController){
+        // Negative-only native-host mode checks genuinely enrolled,
+        // consent-signed bytes. Neither altered signature nor altered
+        // reservation may reach host Touch ID or the XPC worker.
+        const reject=altered=>assessNativeReviewedXpc(invalidMode,spawnSync(
+          host,[invalidMode],{
+            input:altered,encoding:'utf8',timeout:3500,maxBuffer:1024,
+            env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
+          }));
+        for(const field of ['controllerSig=','reservationMac=',
+                            'reviewId=','transactionId=']){
+          const tampered=Buffer.from(wire);
+          const start=tampered.indexOf(field);
+          if(start<0)throw Error('Missing enrolled controller signed field.');
+          const index=start+field.length;
+          tampered[index]=tampered[index]===0x66?0x65:0x66;
+          reject(tampered);
+        }
+        reject(Buffer.concat([wire,Buffer.from('approved=true\n')]));
+        checkedGenuineKeychainMutation=true;
+      }
       const observed=spawnSync(host,[approveMode],{
         input:wire,encoding:'utf8',timeout:42000,maxBuffer:1024,
         env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
@@ -239,7 +261,8 @@ async function auditedHandoff(host,dir,{
       if(!/Synthetic dispatch uncertain/.test(error.message))throw error;
       uncertain=true;
     }
-    if(!uncertain||!nativeCrashVerified||callbackCount!==1)
+    if(!uncertain||!nativeCrashVerified||callbackCount!==1||
+       (signController&&!checkedGenuineKeychainMutation))
       throw Error('Controlled native crash and uncertain audit not proven.');
     const reopened=new AuditStore(store.filename,{externalReceiptFile:null});
     const report=inspectMacSyntheticDispatchRecovery(reopened);
@@ -271,7 +294,8 @@ async function auditedHandoff(host,dir,{
   const result=await controller.host.dispatchSynthetic({
     reviewId:review.reviewId,intent,bytes
   });
-  if(result!==true || callbackCount!==1 || store.verify().ok!==true)
+  if(result!==true || callbackCount!==1 || store.verify().ok!==true ||
+     (signController&&!checkedGenuineKeychainMutation))
     throw Error('Audited synthetic handoff acceptance not established.');
   const end=store.list({limit:20});
   const rules=end.map(e=>e.ruleId);
@@ -315,7 +339,7 @@ async function auditedHandoff(host,dir,{
     }
   }
   console.log('PASS: Single HMAC-audited synthetic reservation launched one signed native Touch ID/XPC transaction; consumed review could not be replayed.');
-  if(signController)console.log('PASS: Pre-enrolled macOS Keychain RSA controller identity signed the exact synthetic audited handoff; no private key bytes reached Node.');
+  if(signController)console.log('PASS: Pre-enrolled macOS Keychain RSA controller identity signed the exact synthetic audited handoff; genuine signed-field mutations were rejected before host Touch ID/XPC and no private key bytes reached Node.');
   console.log(signController?
     'NOTE: Persistent Keychain identity and native biometric consent tested with synthetic data. This signer does not independently authenticate the Node HMAC checkpoint; same-user Keychain access and production controller authority are NOT proven. Real import/export remains disabled.':
     restart?
