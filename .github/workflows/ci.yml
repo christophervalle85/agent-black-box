@@ -111,6 +111,17 @@ jobs:
           node examples/mcp-macos-reviewed-rsa-vector.mjs "$out"
           xcrun clang "${flags[@]}" -I"$out" -o "$out/ReviewedSignedAuthorityVector" native/macos/xpc/ReviewedSignedAuthorityVector.c -framework Security
           xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -o "$out/ReviewedSignedTransferHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
+          for old_mode in handoff-approved handoff-invalid approved cancel expired; do
+            set +e
+            response=$("$out/ReviewedSignedTransferHost" "$old_mode")
+            code=$?
+            set -e
+            if [ "$code" -ne 90 ] || [ "$response" != "BBX_REVIEWED_XPC_BAD_ARGS" ]; then
+              echo "ERROR: Pinned RSA host allowed legacy unsigned or standalone mode."
+              exit 1
+            fi
+          done
+          echo "PASS: Pinned RSA native host exposes no legacy unsigned handoff or standalone approval command."
           "$out/ReviewedSignedAuthorityVector" valid < "$out/rsa-valid.txt"
           for input in rsa-bad-signature rsa-bad-reservation rsa-forged-review rsa-other-controller rsa-truncated rsa-extra-field; do
             "$out/ReviewedSignedAuthorityVector" invalid < "$out/$input.txt"
