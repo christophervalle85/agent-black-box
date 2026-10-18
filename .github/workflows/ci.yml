@@ -108,7 +108,14 @@ jobs:
           sed '$d' "$out/authority-wire.txt" | "$out/ReviewedAuthorityVector" invalid
           (cat "$out/authority-wire.txt"; printf 'approved=true\n') | "$out/ReviewedAuthorityVector" invalid
           echo "PASS: Independent native HMAC contract verification rejects recomputed digest forgery; fixture key is PUBLIC, no controller authority proven."
-          echo "PASS: Fifteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
+          node examples/mcp-macos-reviewed-rsa-vector.mjs "$out"
+          xcrun clang "${flags[@]}" -I"$out" -o "$out/ReviewedSignedAuthorityVector" native/macos/xpc/ReviewedSignedAuthorityVector.c -framework Security
+          "$out/ReviewedSignedAuthorityVector" valid < "$out/rsa-valid.txt"
+          for input in rsa-bad-signature rsa-bad-reservation rsa-forged-review rsa-other-controller rsa-truncated rsa-extra-field; do
+            "$out/ReviewedSignedAuthorityVector" invalid < "$out/$input.txt"
+          done
+          echo "PASS: Pinned RSA-PSS native verifier rejected another signing key, forged review, and modified reservation."
+          echo "PASS: Sixteen native fixture executables compiled with Apple's SDK; no signed-peer or GUI/XPC execution was attempted."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
