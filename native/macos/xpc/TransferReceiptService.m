@@ -12,6 +12,22 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef BBX_TEST_DURABLE_REPLAY
+#ifndef BBX_TEST_NATIVE_REVIEWED_RECEIPT
+#error "Durable replay requires exact reviewed-transaction validation."
+#endif
+#ifndef BBX_TEST_SIGNED_PEER_REQUIREMENT
+#error "Durable replay requires OS-enforced signed incoming host identity."
+#endif
+#import <Foundation/Foundation.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stdlib.h>
+#include "ReviewedDurableReplay.h"
+#endif
 #ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
 #include <time.h>
 #include <limits.h>
@@ -108,6 +124,44 @@ static void respond(xpc_connection_t peer,xpc_object_t message,const char *statu
     xpc_connection_send_message(peer,reply);
     xpc_release(reply);
 }
+#ifdef BBX_TEST_DURABLE_REPLAY
+/*
+ * Private worker App Sandbox Documents container, never a path from IPC.
+ * The ordinary receipt build never opens or writes any filesystem storage.
+ */
+static int bbx_replay_directory(void){
+    @autoreleasepool {
+        NSError *error=nil;
+        NSURL *documents=[[NSFileManager defaultManager]
+            URLForDirectory:NSDocumentDirectory
+            inDomain:NSUserDomainMask
+            appropriateForURL:nil create:YES error:&error];
+        if(!documents)return -1;
+        const char *path=[documents fileSystemRepresentation];
+        if(!path || !strstr(path,"/Library/Containers/") ||
+           !strstr(path,"/Data/Documents"))return -1;
+        const int parent=open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        if(parent<0)return -1;
+        if(mkdirat(parent,"AgentBlackBoxReviewedReplay",0700)<0){
+            if(errno!=EEXIST){close(parent);return -1;}
+        }else if(fsync(parent)!=0){
+            close(parent);
+            return -1;
+        }
+        const int directory=openat(parent,"AgentBlackBoxReviewedReplay",
+                                   O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        close(parent);
+        if(directory<0)return -1;
+        struct stat info={0};
+        if(fstat(directory,&info)!=0 || !S_ISDIR(info.st_mode) ||
+           info.st_uid!=geteuid() || (info.st_mode&077)!=0){
+            close(directory);
+            return -1;
+        }
+        return directory;
+    }
+}
+#endif
 static void handle(xpc_connection_t peer,xpc_object_t message){
     if(!exactKeys(message) ||
        !isType(message,"method",XPC_TYPE_STRING) ||
@@ -185,8 +239,24 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
         respond(peer,message,"DIGEST_MISMATCH");
         return;
     }
-    // Even concurrent requests with one nonce must not both succeed.
-    // Exhaustion fails closed; cache is bounded and NOT durable across restart.
+#ifdef BBX_TEST_DURABLE_REPLAY
+    /*
+     * Receipt is ACCEPTED only after atomic create + file and directory
+     * fsync. No rollback/cleanup if durability is uncertain. An entirely
+     * new worker process still sees the same spent nonce in its container.
+     */
+    __block const char *status="STORAGE_DENIED";
+    dispatch_sync(nonceQueue,^{
+        const int folder=bbx_replay_directory();
+        if(folder<0)return;
+        const BBXReplayDecision result=bbx_reviewed_replay_reserve(
+            folder,nonce,transactionId);
+        close(folder);
+        if(result==BBX_REPLAY_FRESH_COMMITTED)status="ACCEPTED";
+        else if(result==BBX_REPLAY_ALREADY_SPENT)status="REPLAY";
+    });
+#else
+    // Other test modes retain bounded, process-local replay cache.
     __block const char *status="REPLAY";
     dispatch_sync(nonceQueue,^{
         for(size_t i=0;i<seenCount;i++)
@@ -203,6 +273,7 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
         seenCount++;
         status="ACCEPTED";
     });
+#endif
     respond(peer,message,status);
 }
 static void acceptPeer(xpc_connection_t peer){
