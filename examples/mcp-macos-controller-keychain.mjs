@@ -68,6 +68,22 @@ export function signMacKeychainReviewedTransaction(helper,tx,{
     publicKey,transaction:tx,reservationMac,now
   });
 }
+/**
+ * Negative-only diagnostic. A fresh helper process must return exactly 88
+ * (the native signing marker exists for this reviewed transaction).
+ * Other failures, including Keychain errors, are NOT evidence of replay.
+ * No signature material or Touch ID prompt may be emitted on this path.
+ */
+export function assertMacKeychainSignerReplayDenied(helper,tx,{
+  reservationMac,now=Date.now()
+}={}){
+  const unsigned=encodeMacKeychainUnsignedReview(tx,{reservationMac,now});
+  const outcome=invoke(helper,['sign'],{input:unsigned,timeout:2500});
+  if(outcome.error||outcome.signal||outcome.status!==88||
+     outcome.stdout.length!==0||outcome.stderr.length!==0)
+    throw Error('Exact native Keychain signer replay denial not proven.');
+  return true;
+}
 async function main(){
   if(process.platform!=='darwin')
     throw Error('Explicit controller Keychain enrollment requires a real Mac.');
