@@ -13,7 +13,8 @@ const marker={
   'handoff-rsa-approved':'BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED\n',
   'handoff-rsa-durable-invalid':'BBX_REVIEWED_XPC_INVALID_DURABLE_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
   'handoff-rsa-durable-approved':'BBX_REVIEWED_XPC_RSA_DURABLE_TOUCHID_ACCEPTED\n',
-  'handoff-rsa-durable-replay':'BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED\n'
+  'handoff-rsa-durable-replay':'BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED\n',
+  'handoff-rsa-durable-restart':'BBX_REVIEWED_XPC_WORKER_RESTART_REPLAY_DENIED\n'
 };
 const good=mode=>({stdout:marker[mode],stderr:'',status:0,
   signal:null,error:null});
@@ -123,4 +124,52 @@ test('native host owns authentication and worker validates exact reviewed receip
   assert.ok(host.includes('"REPLAY",NULL)'));
   assert.ok(worker.includes('BBX_TEST_DURABLE_REPLAY'));
   assert.ok(worker.includes('bbx_reviewed_replay_reserve('));
+});
+
+test('controlled worker restart proves old PID exited and a new signed worker denied replay',()=>{
+  const host=readFileSync(new URL(
+    '../native/macos/xpc/ReviewedTransferHost.m',import.meta.url),'utf8');
+  const worker=readFileSync(new URL(
+    '../native/macos/xpc/TransferReceiptService.m',import.meta.url),'utf8');
+  const restart=readFileSync(new URL(
+    '../native/macos/xpc/ReviewedWorkerRestartTest.h',import.meta.url),'utf8');
+  const runner=readFileSync(new URL(
+    '../examples/mcp-macos-xpc-native-reviewed.mjs',import.meta.url),'utf8');
+  const ci=readFileSync(new URL(
+    '../.github/workflows/ci.yml',import.meta.url),'utf8');
+  for(const item of [
+    'BBX_TEST_DURABLE_WORKER_RESTART',
+    'bbx_test_handle_worker_lifecycle(peer,event)',
+    'bbx_test_initialize_worker_instance()'
+  ])assert.ok(worker.includes(item),item);
+  assert.match(restart,/#error "Test worker shutdown requires signed-peer-gated durable receipts/);
+  assert.match(restart,/arc4random_buf\(randomBytes,sizeof\(randomBytes\)\)/);
+  assert.match(restart,/strcmp\(method,"bbx_test_worker_identity"\)/);
+  assert.match(restart,/strcmp\(method,"bbx_test_worker_exit"\)/);
+  assert.match(restart,/strcmp\(key,"method"\)!=0/);
+  assert.match(restart,/count!=1/);
+  assert.match(restart,/dispatch_after\(/);
+  assert.match(restart,/_exit\(0\)/);
+  for(const item of [
+    'if(kill((pid_t)before.pid,0)==-1&&errno==ESRCH)',
+    'after.pid!=before.pid',
+    'strcmp(after.instance,before.instance)!=0',
+    'strcmp(before.instance,exitAck.instance)!=0',
+    '"REPLAY",NULL)',
+    'BBX_REVIEWED_XPC_WORKER_RESTART_REPLAY_DENIED',
+    'BBX_REVIEWED_XPC_WORKER_RESTART_NOT_PROVEN',
+    'bbx_test_force_restart_and_reject(&review)'
+  ])assert.ok(host.includes(item),item);
+  assert.ok(host.indexOf('importSignedPreissuedReview(&review)') <
+    host.indexOf('bbx_test_force_restart_and_reject(&review)'));
+  assert.ok(host.indexOf('bbx_test_force_restart_and_reject(&review)') <
+    host.indexOf('const int auth=authenticateReview(&review);'));
+  assert.match(runner,/const restart=mode==='handoff-rsa-durable-restart'/);
+  assert.match(runner,/assessNativeReviewedXpc\('handoff-rsa-durable-restart',outcome\)/);
+  assert.match(runner,/timeout:18000,maxBuffer:1024/);
+  assert.match(runner,/if\(restart&&!durable\)throw/);
+  assert.match(ci,/ReviewedWorkerRestartHost/);
+  assert.match(ci,/ReviewedWorkerRestartWorker/);
+  assert.match(ci,/BBX_TEST_DURABLE_WORKER_RESTART=1/);
+  assert.doesNotMatch(worker,/kill\s*\(|\bexecl?\s*\(/);
 });
