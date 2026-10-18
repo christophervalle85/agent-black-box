@@ -212,6 +212,12 @@ static int signFixedSyntheticReview(const char *auditDirectory){
                                 clockValue.tv_nsec/1000000;
     if(afterApproval<review.issuedAt||afterApproval>=review.expiresAt)
         return 87;
+    /* Touch ID is asynchronous. Fail closed if the durable audit was
+       modified, truncated, or advanced while the operator was deciding.
+       This is a fresh validation, not an assurance against an adversary
+       holding Node's audit HMAC key or racing a same-user filesystem. */
+    if(!bbx_test_verify_native_audit(auditDirectory,&review,mac))
+        return 87;
     /* Native consent is single-use: consume the nonce DURABLY before
        using the Keychain signing key, even if the signature/ACK fails.
        This is a separate native evidence boundary, not Node HMAC proof. */
