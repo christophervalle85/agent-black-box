@@ -95,7 +95,7 @@ function verifyWorkerSandbox(worker){
  */
 async function auditedHandoff(host,dir,{
   privateKey=null,signController=null,
-  durable=false,restart=false,crashPhase=null
+  durable=false,restart=false,crashPhase=null,denyController=false
 }={}){
   if(restart&&!durable)throw Error('Worker restart requires durable replay mode.');
   if(crashPhase!==null&&(!durable||
@@ -103,6 +103,8 @@ async function auditedHandoff(host,dir,{
     throw Error('Synthetic crash requires signed durable replay mode.');
   if(privateKey!==null&&signController!==null)
     throw Error('Only one native controller signing identity is permitted.');
+  if(denyController&&typeof signController!=='function')
+    throw Error('Controller consent cancellation requires Keychain signer.');
   const rsa=privateKey!==null||typeof signController==='function';
   if(durable&&!rsa)throw Error('Durable native replay requires signed controller data.');
   const approveMode=crashPhase?'handoff-rsa-crash-'+crashPhase:
@@ -119,6 +121,8 @@ async function auditedHandoff(host,dir,{
   let signedCommittedWire=null;
   let nativeCrashVerified=false;
   let checkedGenuineKeychainMutation=false;
+  let nativeHostLaunchCount=0;
+  let consentUnexpectedlyGranted=false;
   const controller=createAuditedMacTransferController({
     store,clock:Date.now,syntheticTimeoutMs:30000,
     syntheticTransport:context=>{
@@ -132,6 +136,12 @@ async function auditedHandoff(host,dir,{
         rsa?encodeMacReviewedRsaHandoff(context.transaction,{
           privateKey,reservationMac:store.verify().head
         }):encodeCanonicalMacReviewedHandoff(context.transaction);
+      if(denyController){
+        // An actual signature after the operator was instructed to cancel
+        // is a HARD failure. Never launch the native host on this branch.
+        consentUnexpectedlyGranted=true;
+        throw Error('Unexpected operator signature during denial test.');
+      }
       if(durable)signedCommittedWire=Buffer.from(wire);
       if(signController){
         // Negative-only native-host mode checks genuinely enrolled,
@@ -154,6 +164,7 @@ async function auditedHandoff(host,dir,{
         reject(Buffer.concat([wire,Buffer.from('approved=true\n')]));
         checkedGenuineKeychainMutation=true;
       }
+      nativeHostLaunchCount++;
       const observed=spawnSync(host,[approveMode],{
         input:wire,encoding:'utf8',timeout:42000,maxBuffer:1024,
         env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
@@ -248,9 +259,40 @@ async function auditedHandoff(host,dir,{
   console.log('PASS: Mutated preissued review fields were rejected before Touch ID or XPC.');
   if(!controller.controller.decide(review.reviewId,'approve'))
     throw Error('Trusted local synthetic controller did not stage review.');
-  console.log(signController?
+  console.log(denyController?
+    'ACTION: At the native controller signer Touch ID prompt, choose Cancel. Do NOT approve. The receipt host must NEVER launch.':
+    signController?
     'ACTION: Approve the native controller signer Touch ID review, then approve the separate signed host Touch ID prompt. Both prompts are for fixed synthetic bytes.':
     'ACTION: Authenticated test-harness handoff to signed host. Approve ONLY the Touch ID prompt for the fixed synthetic bytes.');
+  if(denyController){
+    let uncertain=false;
+    try{
+      await controller.host.dispatchSynthetic({
+        reviewId:review.reviewId,intent,bytes
+      });
+    }catch(error){
+      if(!/Synthetic dispatch uncertain/.test(error.message))throw error;
+      uncertain=true;
+    }
+    const audit=inspectMacSyntheticDispatchRecovery(new AuditStore(
+      store.filename,{externalReceiptFile:null}));
+    const verdict=audit.dispatches.find(x=>x.reviewId===review.reviewId);
+    if(!uncertain||consentUnexpectedlyGranted||nativeHostLaunchCount!==0||
+       callbackCount!==1||audit.hasUncertainDispatch!==true||
+       verdict?.canRetry!==false||verdict?.status!=='unknown')
+      throw Error('Native operator consent denial was not proven.');
+    try{
+      await controller.host.dispatchSynthetic({
+        reviewId:review.reviewId,intent,bytes
+      });
+      throw Error('Denied synthetic review unexpectedly replayed.');
+    }catch(error){
+      if(!/No unconsumed/.test(error.message))throw error;
+    }
+    console.log('PASS: Keychain controller signer refused the synthetic signature; no native receipt host was launched and approval could not be reused.');
+    console.log('PASS: HMAC audit remained UNCERTAIN and nonretryable after native consent refusal; no real file operation occurred.');
+    return;
+  }
   if(crashPhase){
     let uncertain=false;
     try{
@@ -361,8 +403,8 @@ async function main(){
         'handoff-rsa-durable-restart',
         'handoff-rsa-crash-before','handoff-rsa-crash-after',
         'handoff-rsa-keychain','handoff-rsa-keychain-suite',
-        'approved','cancel','expired'].includes(mode)))
-    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, handoff-rsa-crash-before, handoff-rsa-crash-after, handoff-rsa-keychain, handoff-rsa-keychain-suite, approved, cancel or expired.');
+        'handoff-rsa-keychain-deny','approved','cancel','expired'].includes(mode)))
+    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, handoff-rsa-crash-before, handoff-rsa-crash-after, handoff-rsa-keychain, handoff-rsa-keychain-suite, handoff-rsa-keychain-deny, approved, cancel or expired.');
   const identity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Apple Development certificate discovery').stdout);
@@ -373,7 +415,8 @@ async function main(){
     const suite=mode==='handoff-rsa-keychain-suite';
     const restart=mode==='handoff-rsa-durable-restart';
     const durable=mode==='handoff-rsa-durable'||restart||crashPhase!==null||suite;
-    const keychain=mode==='handoff-rsa-keychain'||suite;
+    const keychain=mode==='handoff-rsa-keychain'||suite||
+      mode==='handoff-rsa-keychain-deny';
     const rsa=mode==='handoff-rsa'||durable||keychain;
     const signer=rsa&&!keychain?createEphemeralMacControllerSigner():null;
     let signController=null;
@@ -462,7 +505,8 @@ async function main(){
     if(mode==='handoff'||mode==='handoff-rsa'||durable||keychain){
       await auditedHandoff(host,temp,{
         privateKey:signer?.privateKey??null,signController,
-        durable,restart,crashPhase
+        durable,restart,crashPhase,
+        denyController:mode==='handoff-rsa-keychain-deny'
       });
       return;
     }
