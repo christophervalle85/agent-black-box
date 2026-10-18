@@ -308,7 +308,9 @@ int main(int argc,const char *argv[]){
                 puts("BBX_REVIEWED_XPC_UNEXPECTED_VALID_HANDOFF");
                 return 87;
             }
-#ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
+#ifdef BBX_TEST_DURABLE_REPLAY
+            puts("BBX_REVIEWED_XPC_INVALID_DURABLE_RSA_HANDOFF_NO_AUTH_NO_XPC");
+#elif defined(BBX_TEST_RSA_CONTROLLER_HANDOFF)
             puts("BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC");
 #else
             puts("BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC");
