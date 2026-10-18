@@ -18,7 +18,7 @@ export function createAuditedMacTransferController({
      syntheticTimeoutMs>30000)
     throw Error('Invalid opt-in synthetic dispatch configuration.');
   const queue=createMacTransferReviewPair({clock});
-  const audit=(review,ruleId,decision,outcome,summary)=>{
+  const audit=(review,ruleId,decision,outcome,summary,transfer=null)=>{
     const intent=review.intent;
     const event={
       id:randomUUID(),timestamp:new Date(clock()).toISOString(),
@@ -27,7 +27,14 @@ export function createAuditedMacTransferController({
       input:'Synthetic '+intent.operation+' '+intent.noteName+'; bytes omitted',
       decision,risk:'high',riskScore:75,ruleId,
       reason:summary,outcome,summary,durationMs:0,
-      approvalId:review.reviewId
+      approvalId:review.reviewId,
+      ...(transfer===null?{}:{
+        transferTransactionId:transfer.transactionId,
+        transferNonce:transfer.nonce,
+        transferSHA256:transfer.sha256,
+        transferBytes:transfer.byteLength,
+        transferExpiresAt:transfer.expiresAt
+      })
     };
     return store.add(event);
   };
@@ -64,7 +71,8 @@ export function createAuditedMacTransferController({
     try{
       // Must be HMAC-durable BEFORE the injected callback can run.
       audit(review,'MAC_TRANSFER_DISPATCH_RESERVED','review','pending',
-        'Synthetic dispatch reservation durable; one-use review consumed.');
+        'Synthetic dispatch reservation durable; one-use review consumed.',
+        transaction);
       store.verify();
     }catch{
       snapshot.fill(0);
