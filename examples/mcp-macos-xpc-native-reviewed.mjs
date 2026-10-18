@@ -119,7 +119,7 @@ async function auditedHandoff(host,dir,{
   let signedCommittedWire=null;
   let nativeCrashVerified=false;
   const controller=createAuditedMacTransferController({
-    store,clock:Date.now,syntheticTimeoutMs:90000,
+    store,clock:Date.now,syntheticTimeoutMs:30000,
     syntheticTransport:context=>{
       callbackCount++;
       // Sign only after the independently HMAC-verified reservation event.
