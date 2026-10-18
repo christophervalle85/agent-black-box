@@ -58,10 +58,14 @@ export function readMacKeychainControllerIdentity(helper){
   return parseMacKeychainPublicRecord(result.stdout.toString('ascii'));
 }
 export function signMacKeychainReviewedTransaction(helper,tx,{
-  publicKey,reservationMac,now=Date.now()
+  publicKey,reservationMac,auditDirectory,now=Date.now()
 }={}){
+  if(typeof auditDirectory!=='string'||!auditDirectory.startsWith('/')||
+     !auditDirectory.endsWith('audit-not-a-path')&&auditDirectory.includes('\0'))
+    throw Error('Native HMAC audit directory required.');
   const unsigned=encodeMacKeychainUnsignedReview(tx,{reservationMac,now});
-  const result=invoke(helper,['sign'],{input:unsigned,timeout:50000});
+  const result=invoke(helper,['sign',auditDirectory],
+    {input:unsigned,timeout:50000});
   if(result.error||result.signal||result.status!==0)
     throw Error('Persistent controller did not obtain Touch ID consent or refused the signed review.');
   return validateMacKeychainSignedReview(result.stdout,{
@@ -75,10 +79,14 @@ export function signMacKeychainReviewedTransaction(helper,tx,{
  * No signature material or Touch ID prompt may be emitted on this path.
  */
 export function assertMacKeychainSignerReplayDenied(helper,tx,{
-  reservationMac,now=Date.now()
+  reservationMac,auditDirectory,now=Date.now()
 }={}){
+  if(typeof auditDirectory!=='string'||!auditDirectory.startsWith('/')||
+     auditDirectory.includes('\0'))
+    throw Error('Native HMAC audit directory required.');
   const unsigned=encodeMacKeychainUnsignedReview(tx,{reservationMac,now});
-  const outcome=invoke(helper,['sign'],{input:unsigned,timeout:2500});
+  const outcome=invoke(helper,['sign',auditDirectory],
+    {input:unsigned,timeout:2500});
   if(outcome.error||outcome.signal||outcome.status!==88||
      outcome.stdout.length!==0||outcome.stderr.length!==0)
     throw Error('Exact native Keychain signer replay denial not proven.');
