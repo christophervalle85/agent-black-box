@@ -156,11 +156,14 @@ async function auditedHandoff(host,dir,{
   });
   const review=controller.host.request(intent);
   const transaction=createCanonicalMacReviewedTransaction(review,{now});
-  const valid=signController?
-    signController(transaction,store.verify().head):
-    rsa?encodeMacReviewedRsaHandoff(transaction,{
-      privateKey,reservationMac:store.verify().head,now
-    }):encodeCanonicalMacReviewedHandoff(transaction,{now});
+  // Keychain signer has its own native consent gate. Never request a
+  // signature before the controller has reserved and burned the review.
+  // Preflight negatives use a disposable UNTRUSTED issuer instead.
+  const preflightKey=signController?
+    createEphemeralMacControllerSigner().privateKey:null;
+  const valid=rsa?encodeMacReviewedRsaHandoff(transaction,{
+    privateKey:preflightKey??privateKey,reservationMac:store.verify().head,now
+  }):encodeCanonicalMacReviewedHandoff(transaction,{now});
 
   // Negative cases originate from the local harness, NOT the agent.
   // Reject before HMAC approval, Touch ID or signed XPC dispatch.
@@ -223,7 +226,9 @@ async function auditedHandoff(host,dir,{
   console.log('PASS: Mutated preissued review fields were rejected before Touch ID or XPC.');
   if(!controller.controller.decide(review.reviewId,'approve'))
     throw Error('Trusted local synthetic controller did not stage review.');
-  console.log('ACTION: Authenticated test-harness handoff to signed host. Approve ONLY the Touch ID prompt for the fixed synthetic bytes.');
+  console.log(signController?
+    'ACTION: Approve the native controller signer Touch ID review, then approve the separate signed host Touch ID prompt. Both prompts are for fixed synthetic bytes.':
+    'ACTION: Authenticated test-harness handoff to signed host. Approve ONLY the Touch ID prompt for the fixed synthetic bytes.');
   if(crashPhase){
     let uncertain=false;
     try{
@@ -311,7 +316,9 @@ async function auditedHandoff(host,dir,{
   }
   console.log('PASS: Single HMAC-audited synthetic reservation launched one signed native Touch ID/XPC transaction; consumed review could not be replayed.');
   if(signController)console.log('PASS: Pre-enrolled macOS Keychain RSA controller identity signed the exact synthetic audited handoff; no private key bytes reached Node.');
-  console.log(restart?
+  console.log(signController?
+    'NOTE: Persistent Keychain identity and native biometric consent tested with synthetic data. This signer does not independently authenticate the Node HMAC checkpoint; same-user Keychain access and production controller authority are NOT proven. Real import/export remains disabled.':
+    restart?
     'NOTE: Controlled worker exit and relaunch tested with fixed synthetic bytes. Production controller identity, trusted UI and actual import/export remain disabled.':
     durable?
     'NOTE: Test-only worker App Sandbox nonce marker persists; XPC worker restart is not proven. No independently provisioned controller identity, real file transfer or production authority.':
@@ -329,8 +336,9 @@ async function main(){
      (!['all','handoff','handoff-rsa','handoff-rsa-durable',
         'handoff-rsa-durable-restart',
         'handoff-rsa-crash-before','handoff-rsa-crash-after',
-        'handoff-rsa-keychain','approved','cancel','expired'].includes(mode)))
-    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, handoff-rsa-crash-before, handoff-rsa-crash-after, handoff-rsa-keychain, approved, cancel or expired.');
+        'handoff-rsa-keychain','handoff-rsa-keychain-suite',
+        'approved','cancel','expired'].includes(mode)))
+    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, handoff-rsa-crash-before, handoff-rsa-crash-after, handoff-rsa-keychain, handoff-rsa-keychain-suite, approved, cancel or expired.');
   const identity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Apple Development certificate discovery').stdout);
@@ -338,9 +346,10 @@ async function main(){
   try{
     const crashPhase=mode==='handoff-rsa-crash-before'?'before':
       mode==='handoff-rsa-crash-after'?'after':null;
+    const suite=mode==='handoff-rsa-keychain-suite';
     const restart=mode==='handoff-rsa-durable-restart';
-    const durable=mode==='handoff-rsa-durable'||restart||crashPhase!==null;
-    const keychain=mode==='handoff-rsa-keychain';
+    const durable=mode==='handoff-rsa-durable'||restart||crashPhase!==null||suite;
+    const keychain=mode==='handoff-rsa-keychain'||suite;
     const rsa=mode==='handoff-rsa'||durable||keychain;
     const signer=rsa&&!keychain?createEphemeralMacControllerSigner():null;
     let signController=null;
@@ -380,8 +389,9 @@ async function main(){
       '-DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1',
       ...(rsa?['-DBBX_TEST_RSA_CONTROLLER_HANDOFF=1','-I',temp]:[]),
       ...(durable?['-DBBX_TEST_DURABLE_REPLAY=1']:[]),
-      ...(restart||crashPhase?['-DBBX_TEST_DURABLE_WORKER_RESTART=1']:[]),
-      ...(crashPhase?['-DBBX_TEST_CRASH_RECONCILE=1']:[])];
+      ...(restart||crashPhase||suite?['-DBBX_TEST_DURABLE_WORKER_RESTART=1']:[]),
+      ...(crashPhase||suite?['-DBBX_TEST_CRASH_RECONCILE=1']:[]),
+      ...(suite?['-DBBX_TEST_KEYCHAIN_FULL_SUITE=1']:[])];
     command('/usr/bin/xcrun',['clang',...flags,'-o',host,
       join(native,'ReviewedTransferHost.m'),
       '-framework','Foundation','-framework','LocalAuthentication',
@@ -406,6 +416,25 @@ async function main(){
       throw Error('Signing Team ID mismatch; native review denied.');
     verifyWorkerSandbox(service);
     console.log('PASS: Apple Development-signed native Touch ID host and sandboxed XPC worker verified with matching Team IDs.');
+    if(suite){
+      // Three DISTINCT HMAC reviews, signed by ONE pre-enrolled Keychain
+      // identity, all checked by the SAME signed sandboxed worker build.
+      // No review, payload or nonce is ever automatically retried.
+      for(const [name,options] of [
+        ['restart',{restart:true}],
+        ['crash-before',{crashPhase:'before'}],
+        ['crash-after',{crashPhase:'after'}]
+      ]){
+        const auditDir=join(temp,'suite-'+name);
+        mkdirSync(auditDir,{mode:0o700});
+        console.log('ACTION: Keychain integrated synthetic '+name+' acceptance.');
+        await auditedHandoff(host,auditDir,{
+          signController,durable:true,...options
+        });
+      }
+      console.log('PASS: One pinned Keychain controller identity passed native consent, signed XPC durable replay/restart and both uncertain-crash gates across three separate synthetic reviews.');
+      return;
+    }
     if(mode==='handoff'||mode==='handoff-rsa'||durable||keychain){
       await auditedHandoff(host,temp,{
         privateKey:signer?.privateKey??null,signController,
