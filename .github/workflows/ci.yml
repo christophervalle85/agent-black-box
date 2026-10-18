@@ -170,8 +170,23 @@ jobs:
             fi
           done
           echo "PASS: Durable RSA native host compiled and old unsigned modes remain disabled."
+          # Worker lifecycle control exists ONLY in this diagnostic build.
+          xcrun clang "${flags[@]}" -fno-objc-arc -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_DURABLE_REPLAY=1 -DBBX_TEST_DURABLE_WORKER_RESTART=1 -o "$out/ReviewedWorkerRestartWorker" native/macos/xpc/TransferReceiptService.m -framework Foundation
+          xcrun clang "${flags[@]}" -fno-objc-arc -I"$out" -DBBX_TEST_SIGNED_PEER_REQUIREMENT=1 -DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1 -DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1 -DBBX_TEST_RSA_CONTROLLER_HANDOFF=1 -DBBX_TEST_DURABLE_REPLAY=1 -DBBX_TEST_DURABLE_WORKER_RESTART=1 -o "$out/ReviewedWorkerRestartHost" native/macos/xpc/ReviewedTransferHost.m -framework Foundation -framework LocalAuthentication -framework Security
+          for old_mode in approved cancel expired handoff-approved handoff-rsa-approved handoff-rsa-invalid handoff-rsa-durable-approved-without-review; do
+            set +e
+            response=$("$out/ReviewedWorkerRestartHost" "$old_mode")
+            code=$?
+            set -e
+            if [ "$code" -ne 90 ] || [ "$response" != "BBX_REVIEWED_XPC_BAD_ARGS" ]; then
+              echo "ERROR: Diagnostic restart host allowed a legacy command."
+              exit 1
+            fi
+          done
+          echo "PASS: Restart-only signed host and signed-peer XPC worker compiled; legacy commands denied without biometrics."
+          echo "PASS: Real XPC worker process exit/PID/instance evidence requires an interactive development Mac."
           echo "PASS: Durable native replay rejects symlinks and forged nonce metadata; 8 concurrent processes yield exactly one committed nonce."
-          echo "PASS: Twenty native fixture executables compiled with Apple's SDK; durable worker GUI/XPC execution requires real-Mac acceptance."
+          echo "PASS: Twenty-two native fixture executables compiled with Apple's SDK; durable worker GUI/XPC execution requires real-Mac acceptance."
   official-mcp-sdk-interop:
     runs-on: ubuntu-latest
     steps:
