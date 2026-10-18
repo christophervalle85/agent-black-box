@@ -13,6 +13,9 @@ import {AuditStore} from '../src/audit.mjs';
 import {createMacTransferIntent} from '../src/macos-transfer-intent.mjs';
 import {createAuditedMacTransferController} from '../src/macos-transfer-controller.mjs';
 import {
+  inspectMacSyntheticDispatchRecovery,classifyMacSyntheticUncertainReceipt
+} from '../src/macos-transfer-recovery.mjs';
+import {
   createCanonicalMacReviewedTransaction,encodeCanonicalMacReviewedHandoff
 } from '../src/macos-reviewed-transaction.mjs';
 import {
@@ -38,7 +41,9 @@ const marker=Object.freeze({
   'handoff-rsa-durable-invalid':'BBX_REVIEWED_XPC_INVALID_DURABLE_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
   'handoff-rsa-durable-approved':'BBX_REVIEWED_XPC_RSA_DURABLE_TOUCHID_ACCEPTED\n',
   'handoff-rsa-durable-replay':'BBX_REVIEWED_XPC_DURABLE_REPLAY_REJECTED\n',
-  'handoff-rsa-durable-restart':'BBX_REVIEWED_XPC_WORKER_RESTART_REPLAY_DENIED\n'
+  'handoff-rsa-durable-restart':'BBX_REVIEWED_XPC_WORKER_RESTART_REPLAY_DENIED\n',
+  'handoff-rsa-crash-before':'BBX_REVIEWED_XPC_CRASH_BEFORE_NO_MARKER_NO_RETRY\n',
+  'handoff-rsa-crash-after':'BBX_REVIEWED_XPC_CRASH_AFTER_SPENT_NO_ACK_NO_RETRY\n'
 });
 export function assessNativeReviewedXpc(mode,outcome){
   if(!Object.hasOwn(marker,mode))
@@ -83,12 +88,16 @@ function verifyWorkerSandbox(worker){
  * production-ready authorization channel or a bearer-ticket design.
  */
 async function auditedHandoff(host,dir,{
-  privateKey=null,durable=false,restart=false
+  privateKey=null,durable=false,restart=false,crashPhase=null
 }={}){
   if(restart&&!durable)throw Error('Worker restart requires durable replay mode.');
+  if(crashPhase!==null&&(!durable||
+     !['before','after'].includes(crashPhase)))
+    throw Error('Synthetic crash requires signed durable replay mode.');
   const rsa=privateKey!==null;
   if(durable&&!rsa)throw Error('Durable native replay requires signed controller data.');
-  const approveMode=durable?'handoff-rsa-durable-approved':
+  const approveMode=crashPhase?'handoff-rsa-crash-'+crashPhase:
+    durable?'handoff-rsa-durable-approved':
     rsa?'handoff-rsa-approved':'handoff-approved';
   const invalidMode=durable?'handoff-rsa-durable-invalid':
     rsa?'handoff-rsa-invalid':'handoff-invalid';
@@ -99,6 +108,7 @@ async function auditedHandoff(host,dir,{
   });
   let callbackCount=0;
   let signedCommittedWire=null;
+  let nativeCrashVerified=false;
   const controller=createAuditedMacTransferController({
     store,clock:Date.now,syntheticTimeoutMs:30000,
     syntheticTransport:context=>{
@@ -119,6 +129,12 @@ async function auditedHandoff(host,dir,{
         assessNativeReviewedXpc(approveMode,observed);
       }catch{
         // Unknown native outcome is never success or permission to retry.
+        return undefined;
+      }
+      if(crashPhase){
+        // A successful *diagnostic* means the worker actually died and a new
+        // instance observed the receipt marker. There was NO operation ACK.
+        nativeCrashVerified=true;
         return undefined;
       }
       return 'SYNTHETIC_ACCEPTED';
@@ -195,6 +211,45 @@ async function auditedHandoff(host,dir,{
   if(!controller.controller.decide(review.reviewId,'approve'))
     throw Error('Trusted local synthetic controller did not stage review.');
   console.log('ACTION: Authenticated test-harness handoff to signed host. Approve ONLY the Touch ID prompt for the fixed synthetic bytes.');
+  if(crashPhase){
+    let uncertain=false;
+    try{
+      await controller.host.dispatchSynthetic({
+        reviewId:review.reviewId,intent,bytes
+      });
+    }catch(error){
+      if(!/Synthetic dispatch uncertain/.test(error.message))throw error;
+      uncertain=true;
+    }
+    if(!uncertain||!nativeCrashVerified||callbackCount!==1)
+      throw Error('Controlled native crash and uncertain audit not proven.');
+    const reopened=new AuditStore(store.filename,{externalReceiptFile:null});
+    const report=inspectMacSyntheticDispatchRecovery(reopened);
+    const evidence=classifyMacSyntheticUncertainReceipt(report,{
+      reviewId:review.reviewId,
+      observation:crashPhase==='before'?'no-marker':'matching-marker'
+    });
+    if(evidence.status!=='unknown'||evidence.canRetry||
+       evidence.canClaimSuccess||report.inspectedRecords<6||
+       reopened.list({limit:1})[0]?.ruleId!=='MAC_TRANSFER_DISPATCH_UNCERTAIN')
+      throw Error('Unknown post-crash outcome was misclassified.');
+    try{
+      await controller.host.dispatchSynthetic({
+        reviewId:review.reviewId,intent,bytes
+      });
+      throw Error('Burned synthetic review unexpectedly replayed.');
+    }catch(error){
+      if(!/No unconsumed/.test(error.message))throw error;
+    }
+    if(callbackCount!==1)
+      throw Error('Native crash test launched more than one receipt.');
+    console.log(crashPhase==='before'?
+      'PASS: Verified worker crash before durable reservation, new worker observed NO_MARKER, and no retry or success was inferred.':
+      'PASS: Verified worker crash after durable reservation but before ACK, new worker observed MATCHING_MARKER, and no retry or success was inferred.');
+    console.log('PASS: Reopened HMAC audit kept the synthetic reservation UNCERTAIN; controller approval remained consumed and nonretryable.');
+    console.log('NOTE: Local synthetic receipt markers are not real file commits, and absence is not proof of nonexecution. Production recovery remains disabled.');
+    return;
+  }
   const result=await controller.host.dispatchSynthetic({
     reviewId:review.reviewId,intent,bytes
   });
@@ -258,15 +313,19 @@ async function main(){
   const mode=process.argv[2];
   if(process.argv.length!==3 ||
      (!['all','handoff','handoff-rsa','handoff-rsa-durable',
-        'handoff-rsa-durable-restart','approved','cancel','expired'].includes(mode)))
-    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, approved, cancel or expired.');
+        'handoff-rsa-durable-restart',
+        'handoff-rsa-crash-before','handoff-rsa-crash-after',
+        'approved','cancel','expired'].includes(mode)))
+    throw Error('Expected one mode: all, handoff, handoff-rsa, handoff-rsa-durable, handoff-rsa-durable-restart, handoff-rsa-crash-before, handoff-rsa-crash-after, approved, cancel or expired.');
   const identity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Apple Development certificate discovery').stdout);
   const temp=mkdtempSync(join(tmpdir(),'bbx-native-reviewed-xpc-'));
   try{
+    const crashPhase=mode==='handoff-rsa-crash-before'?'before':
+      mode==='handoff-rsa-crash-after'?'after':null;
     const restart=mode==='handoff-rsa-durable-restart';
-    const durable=mode==='handoff-rsa-durable'||restart;
+    const durable=mode==='handoff-rsa-durable'||restart||crashPhase!==null;
     const rsa=mode==='handoff-rsa'||durable;
     const signer=rsa?createEphemeralMacControllerSigner():null;
     if(signer)writeFileSync(join(temp,'BBXTestPinnedControllerKey.h'),
@@ -289,7 +348,8 @@ async function main(){
       '-DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1',
       ...(rsa?['-DBBX_TEST_RSA_CONTROLLER_HANDOFF=1','-I',temp]:[]),
       ...(durable?['-DBBX_TEST_DURABLE_REPLAY=1']:[]),
-      ...(restart?['-DBBX_TEST_DURABLE_WORKER_RESTART=1']:[])];
+      ...(restart||crashPhase?['-DBBX_TEST_DURABLE_WORKER_RESTART=1']:[]),
+      ...(crashPhase?['-DBBX_TEST_CRASH_RECONCILE=1']:[])];
     command('/usr/bin/xcrun',['clang',...flags,'-o',host,
       join(native,'ReviewedTransferHost.m'),
       '-framework','Foundation','-framework','LocalAuthentication',
@@ -316,7 +376,7 @@ async function main(){
     console.log('PASS: Apple Development-signed native Touch ID host and sandboxed XPC worker verified with matching Team IDs.');
     if(mode==='handoff'||mode==='handoff-rsa'||durable){
       await auditedHandoff(host,temp,{
-        privateKey:signer?.privateKey??null,durable,restart
+        privateKey:signer?.privateKey??null,durable,restart,crashPhase
       });
       return;
     }
