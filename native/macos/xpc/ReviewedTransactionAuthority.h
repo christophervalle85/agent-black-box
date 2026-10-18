@@ -45,11 +45,12 @@ static inline bool bbx_read_authorized_review(
     if(!bbx_reviewed_lowerhex(reservationTag,64) ||
        reservationHex[64]!='\n')return false;
     char *tagLine=reservationHex+65;
-    if(strncmp(tagLine,"authorityMac=",sizeof("authorityMac=")-1)!=0)
-        return false;
-    char *tagHex=tagLine+sizeof("authorityMac=")-1;
-    if((size_t)(data+used-tagHex)!=65 || tagHex[64]!='\n')
-        return false;
+    /* Bounds-check before looking at a fixed prefix on truncated input. */
+    const size_t prefix=sizeof("authorityMac=")-1;
+    if((size_t)(data+used-tagLine)!=prefix+65 ||
+       memcmp(tagLine,"authorityMac=",prefix)!=0)return false;
+    char *tagHex=tagLine+prefix;
+    if(tagHex[64]!='\n')return false;
     char supplied[65];
     memcpy(supplied,tagHex,64);
     supplied[64]='\0';
