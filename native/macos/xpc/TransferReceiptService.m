@@ -32,6 +32,9 @@
 #ifdef BBX_TEST_DURABLE_WORKER_RESTART
 #include "ReviewedWorkerRestartTest.h"
 #endif
+#ifdef BBX_TEST_CRASH_RECONCILE
+#include "ReviewedCrashReconcileTest.h"
+#endif
 #ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
 #include <time.h>
 #include <limits.h>
@@ -213,11 +216,18 @@ static void handle(xpc_connection_t peer,xpc_object_t message){
      */
     __block const char *status="STORAGE_DENIED";
     dispatch_sync(nonceQueue,^{
+#ifdef BBX_TEST_CRASH_RECONCILE
+        bbx_test_maybe_crash_receipt(nonce,transactionId,1);
+#endif
         const int folder=bbx_replay_directory();
         if(folder<0)return;
         const BBXReplayDecision result=bbx_reviewed_replay_reserve(
             folder,nonce,transactionId);
         close(folder);
+#ifdef BBX_TEST_CRASH_RECONCILE
+        if(result==BBX_REPLAY_FRESH_COMMITTED)
+            bbx_test_maybe_crash_receipt(nonce,transactionId,2);
+#endif
         if(result==BBX_REPLAY_FRESH_COMMITTED)status="ACCEPTED";
         else if(result==BBX_REPLAY_ALREADY_SPENT)status="REPLAY";
     });
@@ -260,6 +270,9 @@ static void acceptPeer(xpc_connection_t peer){
         if(xpc_get_type(event)!=XPC_TYPE_DICTIONARY)return;
 #ifdef BBX_TEST_DURABLE_WORKER_RESTART
         if(bbx_test_handle_worker_lifecycle(peer,event))return;
+#endif
+#ifdef BBX_TEST_CRASH_RECONCILE
+        if(bbx_test_handle_crash_reconcile_control(peer,event))return;
 #endif
 #ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
         /* Count EVERY OS-delivered dictionary, including malformed ones.
