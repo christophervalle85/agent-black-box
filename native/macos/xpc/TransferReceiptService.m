@@ -29,6 +29,9 @@
 #include "ReviewedDurableReplay.h"
 #include "ReviewedDurableReplayDirectory.h"
 #endif
+#ifdef BBX_TEST_DURABLE_WORKER_RESTART
+#include "ReviewedWorkerRestartTest.h"
+#endif
 #ifdef BBX_TEST_NATIVE_REVIEWED_RECEIPT
 #include <time.h>
 #include <limits.h>
@@ -255,6 +258,9 @@ static void acceptPeer(xpc_connection_t peer){
 #endif
     xpc_connection_set_event_handler(peer,^(xpc_object_t event){
         if(xpc_get_type(event)!=XPC_TYPE_DICTIONARY)return;
+#ifdef BBX_TEST_DURABLE_WORKER_RESTART
+        if(bbx_test_handle_worker_lifecycle(peer,event))return;
+#endif
 #ifdef BBX_TEST_SIGNED_INBOUND_EVIDENCE
         /* Count EVERY OS-delivered dictionary, including malformed ones.
          * An unauthorized peer should never reach this callback at all. */
@@ -290,6 +296,9 @@ static void acceptPeer(xpc_connection_t peer){
 }
 int main(void){
     nonceQueue=dispatch_queue_create("dev.agentblackbox.synthetic-receipt",DISPATCH_QUEUE_SERIAL);
+#ifdef BBX_TEST_DURABLE_WORKER_RESTART
+    bbx_test_initialize_worker_instance();
+#endif
     xpc_main(acceptPeer);
     return 70;
 }
