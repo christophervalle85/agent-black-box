@@ -119,7 +119,7 @@ async function auditedHandoff(host,dir,{
   let signedCommittedWire=null;
   let nativeCrashVerified=false;
   const controller=createAuditedMacTransferController({
-    store,clock:Date.now,syntheticTimeoutMs:30000,
+    store,clock:Date.now,syntheticTimeoutMs:90000,
     syntheticTransport:context=>{
       callbackCount++;
       // Sign only after the independently HMAC-verified reservation event.
@@ -133,7 +133,7 @@ async function auditedHandoff(host,dir,{
         }):encodeCanonicalMacReviewedHandoff(context.transaction);
       if(durable)signedCommittedWire=Buffer.from(wire);
       const observed=spawnSync(host,[approveMode],{
-        input:wire,encoding:'utf8',timeout:28000,maxBuffer:1024,
+        input:wire,encoding:'utf8',timeout:42000,maxBuffer:1024,
         env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
       });
       try {
