@@ -11,10 +11,16 @@
  * "provision" refuses to replace an existing key. "public" and "sign"
  * NEVER provision one. Sign accepts ONLY an exact fixed synthetic import
  * review plus a bounded audit checkpoint, not arbitrary caller bytes.
+ * Signing requires a fresh OS biometric consent decision IN THIS separately
+ * signed helper after parsing exact transaction fields and before using the
+ * Keychain key. Caller cannot supply "approved" or skip this decision.
+ * Still not an independent privileged controller or ACL-bound trust root.
  */
 #define __STDC_WANT_LIB_EXT1__ 1
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+#import <dispatch/dispatch.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -99,6 +105,47 @@ static int exportPublic(void){
     CFRelease(der);
     return valid&&encoded?0:87;
 }
+/* Test-only, fresh operator approval occurs in the native Keychain signer,
+ * separately from the native receipt host's own Touch ID prompt. No caller
+ * supplied approval bit, cached LA context, fallback password or bypass. */
+static bool approveExactlyReviewedSyntheticTransaction(
+    const BBXPreissuedReview *review){
+    if(!review)return false;
+    LAContext *context=[[LAContext alloc] init];
+    if(!context)return false;
+    context.touchIDAuthenticationAllowableReuseDuration=0;
+    NSError *error=nil;
+    const BOOL available=[context canEvaluatePolicy:
+        LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&error];
+    if(!available){
+        [context invalidate];
+        [context release];
+        return false;
+    }
+    NSString *reason=[NSString stringWithFormat:
+        @"Agent Black Box TEST controller: approve import of "
+         "bbx-test-reviewed.txt (%llu bytes), SHA-256 %.16s..., "
+         "transaction %.12s... Only synthetic data.",
+        (unsigned long long)review->byteLength,
+        review->sha256,review->transactionId];
+    dispatch_semaphore_t completed=dispatch_semaphore_create(0);
+    __block BOOL approved=NO;
+    [context evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+            localizedReason:reason
+                      reply:^(BOOL success,NSError *failure){
+        approved=success&&failure==nil;
+        dispatch_semaphore_signal(completed);
+    }];
+    const long timeout=dispatch_semaphore_wait(completed,
+        dispatch_time(DISPATCH_TIME_NOW,40LL*NSEC_PER_SEC));
+    [context invalidate];
+    [context release];
+#if !OS_OBJECT_USE_OBJC
+    dispatch_release(completed);
+#endif
+    return timeout==0&&approved;
+}
+
 static int signFixedSyntheticReview(void){
     /* A bounded stdin record has the exact canonical fields and a single
        trailing reservationMac=64-lowercase-hex line; no other fields. */
@@ -135,6 +182,13 @@ static int signFixedSyntheticReview(void){
     const int64_t now=(int64_t)clockValue.tv_sec*1000+
                       clockValue.tv_nsec/1000000;
     if(now<review.issuedAt||now>=review.expiresAt)return 87;
+    /* Sign nothing until the operator approves THIS validated review. */
+    if(!approveExactlyReviewedSyntheticTransaction(&review))return 87;
+    if(clock_gettime(CLOCK_REALTIME,&clockValue)!=0)return 87;
+    const int64_t afterApproval=(int64_t)clockValue.tv_sec*1000+
+                                clockValue.tv_nsec/1000000;
+    if(afterApproval<review.issuedAt||afterApproval>=review.expiresAt)
+        return 87;
 
     OSStatus found=errSecSuccess;
     SecKeyRef privateKey=findPrivateKey(&found);
