@@ -107,7 +107,7 @@ test('native controller consent cannot be bypassed and only signs exact syntheti
   const build=contents('examples/mcp-macos-controller-keychain.mjs');
   const runner=contents('examples/mcp-macos-xpc-native-reviewed.mjs');
   const ci=contents('.github/workflows/ci.yml');
-  const signingFunction=source.slice(source.indexOf('static int signFixedSyntheticReview(void)'));
+  const signingFunction=source.slice(source.indexOf('static int signFixedSyntheticReview(const char *auditDirectory)'));
   assert.match(source,/LAPolicyDeviceOwnerAuthenticationWithBiometrics/);
   assert.match(source,/touchIDAuthenticationAllowableReuseDuration=0/);
   assert.match(source,/evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics/);
@@ -121,12 +121,12 @@ test('native controller consent cannot be bypassed and only signs exact syntheti
   assert.ok(signingFunction.indexOf('expectedSyntheticSHA') <
     signingFunction.indexOf('if(!approveExactlyReviewedSyntheticTransaction(&review))return 87;'));
   assert.match(build,/'-framework','LocalAuthentication'/);
-  assert.match(build, /invoke\(helper,\['sign'\],\{input:unsigned,timeout:50000\}\)/);
+  assert.match(build, /invoke\(helper,\['sign',auditDirectory\]/);
   assert.ok(!runner.includes("['provision']"));
   // Native signing must only happen AFTER a durable controller reservation;
   // preflight failures use an UNTRUSTED fixture and require no biometrics.
   assert.ok(runner.includes('const preflightKey=signController?'));
-  assert.ok(runner.includes('signController(context.transaction,store.verify().head)'));
+  assert.ok(runner.includes('signController(context.transaction,store.verify().head,'));
   assert.ok(runner.includes('MAC_TRANSFER_DISPATCH_RESERVED'));
   assert.match(ci,/KeychainControllerSigner\.m -framework Foundation -framework Security -framework LocalAuthentication/);
 });
@@ -190,7 +190,7 @@ test('native Keychain controller consumes one durable nonce before any signature
   assert.doesNotMatch(ledger,/unlink(at)?\s*\(/);
   assert.match(runner,/let signerReplayDenied=false/);
   assert.match(runner,/signController\.verifyReplay\(/);
-  assert.match(runner,/signController\(context\.transaction,store\.verify\(\)\.head\)/);
+  assert.match(runner,/signController\(context\.transaction,store\.verify\(\)\.head,/);
   assert.match(runner,/Native controller signing nonce was durably consumed/);
   assert.ok(signer.includes('if(prior==BBX_REPLAY_MATCHING_MARKER)return 88;'));
   const helper=contents('examples/mcp-macos-controller-keychain.mjs');
@@ -199,4 +199,43 @@ test('native Keychain controller consumes one durable nonce before any signature
   assert.match(helper,/outcome\.stderr\.length!==0/);
   assert.match(helper,/timeout:2500/);
   assert.doesNotMatch(signer,/SecKeyCopyExternalRepresentation\(privateKey/);
+});
+
+test('native Keychain signer independently re-verifies Node HMAC audit and exact reservation before consent',()=>{
+  const signer=contents('native/macos/xpc/KeychainControllerSigner.m');
+  const verifier=contents('native/macos/xpc/ControllerAuditVerifier.h');
+  const vector=contents('native/macos/xpc/ControllerAuditVector.m');
+  const generator=contents('examples/mcp-macos-controller-audit-vector.mjs');
+  const controller=contents('src/macos-transfer-controller.mjs');
+  const runner=contents('examples/mcp-macos-xpc-native-reviewed.mjs');
+  const ci=contents('.github/workflows/ci.yml');
+  assert.ok(signer.includes('#include "ControllerAuditVerifier.h"'));
+  assert.ok(signer.includes('bbx_test_verify_native_audit(auditDirectory,&review,mac)'));
+  assert.ok(signer.indexOf('bbx_test_verify_native_audit(auditDirectory,&review,mac)') <
+    signer.indexOf('if(!approveExactlyReviewedSyntheticTransaction(&review))return 87;'));
+  assert.ok(signer.indexOf('bbx_test_verify_native_audit(auditDirectory,&review,mac)') <
+    signer.indexOf('SecKeyCreateSignature('));
+  for(const marker of [
+    'CCHmac(kCCHmacAlgSHA256',
+    'handoff-audit.jsonl.mac.jsonl',
+    'handoff-audit.jsonl.hmac.key',
+    'handoff-audit.jsonl.anchor.json',
+    'O_RDONLY|O_NOFOLLOW|O_CLOEXEC',
+    'transferTransactionId',
+    'transferNonce',
+    'transferSHA256',
+    'transferBytes',
+    'transferExpiresAt',
+    'MAC_TRANSFER_DISPATCH_RESERVED',
+    'bbx_test_json_quoted_raw',
+    '[checkpoint[@"mac"] isEqualToString:previous]'
+  ])assert.ok(verifier.includes(marker),marker);
+  assert.ok(controller.includes('transferTransactionId:transfer.transactionId'));
+  assert.ok(controller.includes('transferNonce:transfer.nonce'));
+  assert.ok(runner.includes('dirname(store.filename)'));
+  assert.ok(vector.includes('bbx_test_verify_native_audit('));
+  assert.ok(generator.includes('BBX_AUDIT_FIXTURE_RESERVED'));
+  assert.match(ci,/ControllerAuditVector\.m/);
+  assert.match(ci,/mcp-macos-controller-audit-vector\.mjs/);
+  assert.doesNotMatch(verifier,/unlink(at)?\s*\(/);
 });
