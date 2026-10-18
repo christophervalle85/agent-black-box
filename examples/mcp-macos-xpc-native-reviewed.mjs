@@ -5,7 +5,7 @@
  * audited grant, native picker nor production entitlement.
  */
 import {spawnSync} from 'node:child_process';
-import {copyFileSync,mkdirSync,mkdtempSync,rmSync} from 'node:fs';
+import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {homedir,tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -17,7 +17,11 @@ import {
 } from '../src/macos-reviewed-transaction.mjs';
 import {
   selectLocalDevelopmentIdentity,parseSignedIdentity,describeCodesignFailure
-} from './mcp-macos-xpc-signed-peers.mjs';
+ } from './mcp-macos-xpc-signed-peers.mjs';
+import {
+  createEphemeralMacControllerSigner,encodeMacReviewedRsaHandoff,
+  formatPinnedMacRsaPublicHeader
+} from '../src/macos-reviewed-signed-authority.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const native=join(root,'native','macos','xpc');
@@ -28,7 +32,9 @@ const marker=Object.freeze({
   cancel:'BBX_REVIEWED_XPC_CANCELLED_NO_DISPATCH\n',
   expired:'BBX_REVIEWED_XPC_EXPIRED_NO_DISPATCH\n',
   'handoff-invalid':'BBX_REVIEWED_XPC_INVALID_HANDOFF_NO_AUTH_NO_XPC\n',
-  'handoff-approved':'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED\n'
+  'handoff-approved':'BBX_REVIEWED_XPC_PREISSUED_TOUCHID_ACCEPTED\n',
+  'handoff-rsa-invalid':'BBX_REVIEWED_XPC_INVALID_RSA_HANDOFF_NO_AUTH_NO_XPC\n',
+  'handoff-rsa-approved':'BBX_REVIEWED_XPC_RSA_PREISSUED_TOUCHID_ACCEPTED\n'
 });
 export function assessNativeReviewedXpc(mode,outcome){
   if(!Object.hasOwn(marker,mode))
@@ -72,7 +78,10 @@ function verifyWorkerSandbox(worker){
  * The host does NOT authenticate the HMAC reservation: this is not a
  * production-ready authorization channel or a bearer-ticket design.
  */
-async function auditedHandoff(host,dir){
+async function auditedHandoff(host,dir,{privateKey=null}={}){
+  const rsa=privateKey!==null;
+  const approveMode=rsa?'handoff-rsa-approved':'handoff-approved';
+  const invalidMode=rsa?'handoff-rsa-invalid':'handoff-invalid';
   const bytes=Buffer.from('BBX synthetic Touch ID reviewed bytes.\n');
   const now=Date.now();
   const store=new AuditStore(join(dir,'handoff-audit.jsonl'),{
@@ -83,13 +92,19 @@ async function auditedHandoff(host,dir){
     store,clock:Date.now,syntheticTimeoutMs:30000,
     syntheticTransport:context=>{
       callbackCount++;
-      const wire=encodeCanonicalMacReviewedHandoff(context.transaction);
-      const observed=spawnSync(host,['handoff-approved'],{
+      // Sign only after the independently HMAC-verified reservation event.
+      const last=store.list({limit:1})[0];
+      if(last?.ruleId!=='MAC_TRANSFER_DISPATCH_RESERVED' ||
+         last.approvalId!==context.reviewId)return undefined;
+      const wire=rsa?encodeMacReviewedRsaHandoff(context.transaction,{
+        privateKey,reservationMac:store.verify().head
+      }):encodeCanonicalMacReviewedHandoff(context.transaction);
+      const observed=spawnSync(host,[approveMode],{
         input:wire,encoding:'utf8',timeout:28000,maxBuffer:1024,
         env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
       });
       try {
-        assessNativeReviewedXpc('handoff-approved',observed);
+        assessNativeReviewedXpc(approveMode,observed);
       }catch{
         // Unknown native outcome is never success or permission to retry.
         return undefined;
@@ -102,7 +117,9 @@ async function auditedHandoff(host,dir){
   });
   const review=controller.host.request(intent);
   const transaction=createCanonicalMacReviewedTransaction(review,{now});
-  const valid=encodeCanonicalMacReviewedHandoff(transaction,{now});
+  const valid=rsa?encodeMacReviewedRsaHandoff(transaction,{
+    privateKey,reservationMac:store.verify().head,now
+  }):encodeCanonicalMacReviewedHandoff(transaction,{now});
 
   // Negative cases originate from the local harness, NOT the agent.
   // Reject before HMAC approval, Touch ID or signed XPC dispatch.
@@ -122,11 +139,45 @@ async function auditedHandoff(host,dir){
     const offset=pos+field.length;
     const old=mutated[offset];
     mutated[offset]=old===0x66?0x65:0x66;
-    const observed=spawnSync(host,['handoff-invalid'],{
+    const observed=spawnSync(host,[invalidMode],{
       input:mutated,encoding:'utf8',timeout:2500,maxBuffer:1024,
       env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
     });
-    assessNativeReviewedXpc('handoff-invalid',observed);
+    assessNativeReviewedXpc(invalidMode,observed);
+  }
+  if(rsa){
+    const reject=input=>assessNativeReviewedXpc(invalidMode,spawnSync(host,
+      [invalidMode],{
+        input,encoding:'utf8',timeout:2500,maxBuffer:1024,
+        env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
+      }));
+    const changed=Buffer.from(valid);
+    const at=changed.indexOf('controllerSig=')+'controllerSig='.length;
+    if(at<'controllerSig='.length)throw Error('Missing controller signature.');
+    changed[at]=changed[at]===0x66?0x65:0x66;
+    reject(changed);
+    const changedRes=Buffer.from(valid);
+    const atRes=changedRes.indexOf('reservationMac=')+
+      'reservationMac='.length;
+    if(atRes<'reservationMac='.length)throw Error('Missing audit reservation.');
+    changedRes[atRes]=changedRes[atRes]===0x66?0x65:0x66;
+    reject(changedRes);
+    const foreign=createEphemeralMacControllerSigner();
+    reject(encodeMacReviewedRsaHandoff(transaction,{
+      privateKey:foreign.privateKey,reservationMac:store.verify().head,now
+    }));
+    const {reviewId,transactionId,...originalIntent}=transaction;
+    const forged=createCanonicalMacReviewedTransaction({
+      reviewId:'123e4567-e89b-42d3-a456-426614174001',
+      intent:originalIntent
+    },{now});
+    reject(Buffer.from(valid.toString('ascii')
+      .replace('reviewId='+reviewId,'reviewId='+forged.reviewId)
+      .replace('transactionId='+transactionId,
+        'transactionId='+forged.transactionId),'ascii'));
+    reject(valid.subarray(0,-1));
+    reject(Buffer.concat([valid,Buffer.from('approved=true\n')]));
+    console.log('PASS: Native pinned RSA verifier denied forged controller signature, audit checkpoint and coherent review before Touch ID/XPC.');
   }
   console.log('PASS: Mutated preissued review fields were rejected before Touch ID or XPC.');
   if(!controller.controller.decide(review.reviewId,'approve'))
@@ -153,7 +204,9 @@ async function auditedHandoff(host,dir){
   }
   if(callbackCount!==1)throw Error('One-use native launch check failed.');
   console.log('PASS: Single HMAC-audited synthetic reservation launched one signed native Touch ID/XPC transaction; consumed review could not be replayed.');
-  console.log('NOTE: Local test controller decision and plain stdin record are not a production-authenticated handoff. Audit fixture is disposable.');
+  console.log(rsa?
+    'NOTE: Public key pinned from an ephemeral local test issuer, not an independently provisioned controller identity. No trusted UI or durable replay; audit is disposable.':
+    'NOTE: Local test controller decision and plain stdin record are not a production-authenticated handoff. Audit fixture is disposable.');
 }
 
 async function main(){
@@ -162,13 +215,17 @@ async function main(){
     throw Error('Opt-in synthetic test must use MCP_SANDBOX=off.');
   const mode=process.argv[2];
   if(process.argv.length!==3 ||
-     (!['all','handoff','approved','cancel','expired'].includes(mode)))
-    throw Error('Expected exactly one mode: all, handoff, approved, cancel or expired.');
+     (!['all','handoff','handoff-rsa','approved','cancel','expired'].includes(mode)))
+    throw Error('Expected one mode: all, handoff, handoff-rsa, approved, cancel or expired.');
   const identity=selectLocalDevelopmentIdentity(command(
     '/usr/bin/security',['find-identity','-v','-p','codesigning'],
     'Apple Development certificate discovery').stdout);
   const temp=mkdtempSync(join(tmpdir(),'bbx-native-reviewed-xpc-'));
   try{
+    const rsa=mode==='handoff-rsa';
+    const signer=rsa?createEphemeralMacControllerSigner():null;
+    if(signer)writeFileSync(join(temp,'BBXTestPinnedControllerKey.h'),
+      formatPinnedMacRsaPublicHeader(signer.publicKey),{mode:0o600,flag:'wx'});
     const app=join(temp,'BlackBoxTransferReceiptHost.app');
     const host=join(app,'Contents','MacOS','BlackBoxTransferReceiptHost');
     const service=join(app,'Contents','XPCServices',
@@ -184,10 +241,12 @@ async function main(){
       '-Wextra','-Werror=implicit-function-declaration',
       '-DBBX_TEST_SIGNED_PEER_REQUIREMENT=1',
       '-DBBX_TEST_NATIVE_REVIEWED_RECEIPT=1',
-      '-DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1'];
+      '-DBBX_TEST_EXTERNAL_REVIEW_HANDOFF=1',
+      ...(rsa?['-DBBX_TEST_RSA_CONTROLLER_HANDOFF=1','-I',temp]:[])];
     command('/usr/bin/xcrun',['clang',...flags,'-o',host,
       join(native,'ReviewedTransferHost.m'),
-      '-framework','Foundation','-framework','LocalAuthentication'],
+      '-framework','Foundation','-framework','LocalAuthentication',
+      '-framework','Security'],
       'Native reviewed host compilation');
     command('/usr/bin/xcrun',['clang',...flags,'-o',worker,
       join(native,'TransferReceiptService.m'),'-framework','Foundation'],
@@ -208,8 +267,8 @@ async function main(){
       throw Error('Signing Team ID mismatch; native review denied.');
     verifyWorkerSandbox(service);
     console.log('PASS: Apple Development-signed native Touch ID host and sandboxed XPC worker verified with matching Team IDs.');
-    if(mode==='handoff'){
-      await auditedHandoff(host,temp);
+    if(mode==='handoff'||mode==='handoff-rsa'){
+      await auditedHandoff(host,temp,{privateKey:signer?.privateKey??null});
       return;
     }
     // The combined test uses ONE signed app for all three independent
