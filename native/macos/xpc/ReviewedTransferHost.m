@@ -35,6 +35,11 @@
 #include <unistd.h>
 #include <limits.h>
 #endif
+#ifdef BBX_TEST_CRASH_RECONCILE
+#if !defined(BBX_TEST_DURABLE_WORKER_RESTART)
+#error "Crash reconciliation requires signed native worker restart diagnostics."
+#endif
+#endif
 
 static const unsigned char fixture[]="BBX synthetic Touch ID reviewed bytes.\n";
 static const char target[]="bbx-test-reviewed.txt";
@@ -372,6 +377,120 @@ static bool bbx_test_force_restart_and_reject(const NativeReview *review){
 }
 #endif
 
+
+#ifdef BBX_TEST_CRASH_RECONCILE
+/* The only replay evidence accepted by this host comes from the signed XPC
+ * worker, never a path or status supplied over stdin. Diagnostic responses
+ * carry exactly a status, worker PID, and unpredictable process instance. */
+static bool bbx_test_receipt_diagnostic(
+    xpc_connection_t peer,const char *method,const NativeReview *review,
+    const char *phase,const char *expected,BBXTestWorkerInstance *out){
+    if(!peer||!method||!review||!expected||!out ||
+       !reviewIsExact(review))return false;
+    xpc_object_t request=xpc_dictionary_create(NULL,NULL,0);
+    if(!request)return false;
+    xpc_dictionary_set_string(request,"method",method);
+    xpc_dictionary_set_string(request,"nonce",review->nonce);
+    xpc_dictionary_set_string(request,"transactionId",review->transactionId);
+    if(phase)xpc_dictionary_set_string(request,"phase",phase);
+    xpc_object_t reply=xpc_connection_send_message_with_reply_sync(peer,request);
+    xpc_release(request);
+    if(!reply)return false;
+    __block unsigned count=0;
+    __block bool schema=true;
+    if(xpc_get_type(reply)==XPC_TYPE_DICTIONARY)
+        xpc_dictionary_apply(reply,^bool(const char *key,xpc_object_t value){
+            count++;
+            const xpc_type_t type=xpc_get_type(value);
+            if(!((strcmp(key,"status")==0&&type==XPC_TYPE_STRING)||
+                 (strcmp(key,"workerPid")==0&&type==XPC_TYPE_UINT64)||
+                 (strcmp(key,"workerInstance")==0&&type==XPC_TYPE_STRING)))
+                schema=false;
+            return true;
+        });
+    else schema=false;
+    const char *status=schema&&count==3?
+        xpc_dictionary_get_string(reply,"status"):NULL;
+    const char *instance=schema&&count==3?
+        xpc_dictionary_get_string(reply,"workerInstance"):NULL;
+    const uint64_t pid=schema&&count==3?
+        xpc_dictionary_get_uint64(reply,"workerPid"):0;
+    const bool valid=status&&strcmp(status,expected)==0&&
+        instance&&bbx_reviewed_lowerhex(instance,32)&&
+        pid>1&&pid<INT_MAX;
+    if(valid){
+        out->pid=pid;
+        memcpy(out->instance,instance,sizeof(out->instance));
+    }
+    xpc_release(reply);
+    return valid;
+}
+/*
+ * A crashed worker cannot acknowledge a receipt. Even if its durable nonce
+ * marker exists, this is not an OS file import, approval or commit receipt.
+ * No retry and no write are performed after the crash.
+ */
+static bool bbx_test_crash_and_observe(
+    const NativeReview *review,const char *phase){
+    if(!reviewIsExact(review) ||
+       (strcmp(phase,"before")!=0&&strcmp(phase,"after")!=0))
+        return false;
+    xpc_connection_t first=openWorker();
+    if(!first)return false;
+    BBXTestWorkerInstance before={0},armed={0};
+    const bool initialized=bbx_test_worker_command(
+        first,"bbx_test_worker_identity","READY",&before);
+    const bool ready=initialized&&bbx_test_receipt_diagnostic(
+        first,"bbx_test_arm_receipt_crash",review,phase,"ARMED",&armed);
+    if(!ready||before.pid!=armed.pid||
+       strcmp(before.instance,armed.instance)!=0){
+        xpc_connection_cancel(first);
+        xpc_release(first);
+        return false;
+    }
+    /* A correctly validated request is sent ONLY once. An ACK here is
+       failure because the configured worker should have exited first. */
+    const bool incorrectlyAcknowledged=statusIs(first,review,fixture,
+        sizeof(fixture)-1,"ACCEPTED",NULL);
+    xpc_connection_cancel(first);
+    xpc_release(first);
+    if(incorrectlyAcknowledged)return false;
+    bool oldExited=false;
+    for(unsigned n=0;n<60;n++){
+        errno=0;
+        if(kill((pid_t)before.pid,0)==-1&&errno==ESRCH){
+            oldExited=true;
+            break;
+        }
+        usleep(100000);
+    }
+    if(!oldExited)return false;
+    const char *expected=strcmp(phase,"before")==0?
+        "NO_MARKER":"MATCHING_MARKER";
+    for(unsigned attempt=0;attempt<8;attempt++){
+        xpc_connection_t next=openWorker();
+        if(!next)return false;
+        BBXTestWorkerInstance restarted={0},observed={0};
+        const bool readyAgain=bbx_test_worker_command(
+            next,"bbx_test_worker_identity","READY",&restarted);
+        const bool different=readyAgain&&restarted.pid!=before.pid&&
+            strcmp(restarted.instance,before.instance)!=0;
+        const bool evidence=different&&bbx_test_receipt_diagnostic(
+            next,"bbx_test_observe_receipt",review,NULL,expected,&observed);
+        const bool bound=evidence&&restarted.pid==observed.pid&&
+            strcmp(restarted.instance,observed.instance)==0;
+        xpc_connection_cancel(next);
+        xpc_release(next);
+        if(bound)return true;
+        /* Observed another running worker with mismatching durable evidence:
+           fail immediately, never guess or repeat the transaction. */
+        if(readyAgain)return false;
+        usleep(150000);
+    }
+    return false;
+}
+#endif
+
 int main(int argc,const char *argv[]){
 #ifdef BBX_TEST_RSA_CONTROLLER_HANDOFF
     /* Distinct allowlists prevent invoking legacy / no-auth modes on the
@@ -382,6 +501,10 @@ int main(int argc,const char *argv[]){
                    strcmp(argv[1],"handoff-rsa-durable-replay")!=0
 #ifdef BBX_TEST_DURABLE_WORKER_RESTART
                    && strcmp(argv[1],"handoff-rsa-durable-restart")!=0
+#endif
+#ifdef BBX_TEST_CRASH_RECONCILE
+                   && strcmp(argv[1],"handoff-rsa-crash-before")!=0
+                   && strcmp(argv[1],"handoff-rsa-crash-after")!=0
 #endif
                    )){
 #else
@@ -508,9 +631,24 @@ int main(int argc,const char *argv[]){
              "BBX_REVIEWED_XPC_AUTH_NOT_APPROVED");
         return 87;
     }
-    // The ONLY method that can connect to XPC is below the native
-    // biometric-success check, in the same signed process.
+    // The ONLY state-changing operation can connect to XPC only below the
+    // biometric-success check in the same signed process.
     if(!reviewIsExact(&review))return 87;
+#ifdef BBX_TEST_CRASH_RECONCILE
+    if(strcmp(argv[1],"handoff-rsa-crash-before")==0 ||
+       strcmp(argv[1],"handoff-rsa-crash-after")==0){
+        const bool beforeCrash=strcmp(argv[1],"handoff-rsa-crash-before")==0;
+        if(!bbx_test_crash_and_observe(&review,
+                                      beforeCrash?"before":"after")){
+            puts("BBX_REVIEWED_XPC_CRASH_RECONCILIATION_NOT_PROVEN");
+            return 87;
+        }
+        puts(beforeCrash?
+            "BBX_REVIEWED_XPC_CRASH_BEFORE_NO_MARKER_NO_RETRY":
+            "BBX_REVIEWED_XPC_CRASH_AFTER_SPENT_NO_ACK_NO_RETRY");
+        return 0;
+    }
+#endif
     xpc_connection_t peer=openWorker();
     if(!peer){
         puts("BBX_REVIEWED_XPC_OS_GATE_UNAVAILABLE");
