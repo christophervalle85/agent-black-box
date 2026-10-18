@@ -7,9 +7,15 @@
 import {randomUUID} from 'node:crypto';
 import {createMacTransferReviewPair} from './macos-transfer-review.mjs';
 
-export function createAuditedMacTransferController({store,clock=Date.now}={}) {
+export function createAuditedMacTransferController({
+  store,clock=Date.now,syntheticTransport=null,syntheticTimeoutMs=5000
+}={}) {
   if(!store || typeof store.verify!=='function' || typeof store.add!=='function')
     throw Error('Verified HMAC audit store is required.');
+  if((syntheticTransport!==null && typeof syntheticTransport!=='function') ||
+     !Number.isSafeInteger(syntheticTimeoutMs) || syntheticTimeoutMs<1 ||
+     syntheticTimeoutMs>30000)
+    throw Error('Invalid opt-in synthetic dispatch configuration.');
   const queue=createMacTransferReviewPair({clock});
   const audit=(review,ruleId,decision,outcome,summary)=>{
     const intent=review.intent;
@@ -24,6 +30,79 @@ export function createAuditedMacTransferController({store,clock=Date.now}={}) {
     };
     return store.add(event);
   };
+  /**
+   * ATTEMPT -> single-use burn -> durable RESERVATION -> synthetic callback
+   * -> terminal audit. This is an isolated, injected test transport, NOT an
+   * authenticated macOS XPC peer or a substitute for native Touch ID.
+   *
+   * Audit failures before the callback prohibit dispatch; an unexpected,
+   * thrown or timed-out callback burns the grant and records uncertainty.
+   * NEVER retry an uncertain external operation automatically.
+   */
+  async function dispatchSynthetic({reviewId,intent,bytes}={}) {
+    store.verify();
+    const review=queue.controller.lookup(reviewId);
+    if(!review)throw Error('No unconsumed synthetic dispatch approval.');
+    audit(review,'MAC_TRANSFER_DISPATCH_ATTEMPT','review','pending',
+      'Synthetic dispatch staging requested; no native file operation.');
+    // This call burns the approval even when bytes or metadata are wrong.
+    let snapshot;
+    try {
+      queue.host.consume({reviewId,intent,bytes});
+      snapshot=Buffer.from(bytes);
+    } catch {
+      audit(review,'MAC_TRANSFER_DISPATCH_VALIDATION_DENIED','block','blocked',
+        'Single-use synthetic dispatch validation failed; review was burned.');
+      throw Error('Synthetic dispatch validation denied; approval consumed.');
+    }
+    try{
+      // Must be HMAC-durable BEFORE the injected callback can run.
+      audit(review,'MAC_TRANSFER_DISPATCH_RESERVED','review','pending',
+        'Synthetic dispatch reservation durable; one-use review consumed.');
+      store.verify();
+    }catch{
+      snapshot.fill(0);
+      // The grant is burned, and the transport has NOT been called.
+      throw Error('Synthetic dispatch reservation audit failed; no dispatch.');
+    }
+    const context=Object.freeze({
+      reviewId:review.reviewId,intent:review.intent,bytes:snapshot
+    });
+    let outcome;
+    let expired=false;
+    let timer;
+    try{
+      outcome=await Promise.race([
+        Promise.resolve().then(()=>syntheticTransport(context)),
+        new Promise(resolve=>{
+          timer=setTimeout(()=>{expired=true;resolve(null);},syntheticTimeoutMs);
+        })
+      ]);
+    }catch{
+      outcome=null;
+    }finally{
+      clearTimeout(timer);
+      // Clearing our copy also limits post-resolution secret retention.
+      // It CANNOT cancel a transport which is still running after timeout.
+      snapshot.fill(0);
+    }
+    if(!expired && outcome==='SYNTHETIC_ACCEPTED'){
+      // A successful synthetic receipt is not real OS transport authority.
+      store.verify();
+      audit(review,'MAC_TRANSFER_DISPATCH_SIMULATED','allow','simulated',
+        'Injected synthetic transport reported success; no OS transfer.');
+      return true;
+    }
+    store.verify();
+    if(!expired && outcome==='SYNTHETIC_DENIED'){
+      audit(review,'MAC_TRANSFER_DISPATCH_DENIED','block','blocked',
+        'Injected synthetic transport explicitly denied; no automatic retry.');
+      throw Error('Synthetic dispatch denied; approval cannot be reused.');
+    }
+    audit(review,'MAC_TRANSFER_DISPATCH_UNCERTAIN','block','error',
+      'Synthetic transport outcome unknown or timed out; review burned; no retry.');
+    throw Error('Synthetic dispatch uncertain; manual reconciliation required.');
+  }
   const host=Object.freeze({
     request(intent){
       store.verify();
@@ -67,7 +146,9 @@ export function createAuditedMacTransferController({store,clock=Date.now}={}) {
       if(result) audit(review,'MAC_TRANSFER_CANCELLED','block','blocked',
         'Synthetic transfer cancelled; no file operation occurred.');
       return result;
-    }
+    },
+    // NEVER install synthetic dispatch on the ordinary MCP/server facade.
+    ...(syntheticTransport===null?{}:{dispatchSynthetic})
   });
   const controller=Object.freeze({
     pending(){
