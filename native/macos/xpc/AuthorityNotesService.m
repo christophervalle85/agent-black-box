@@ -23,8 +23,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #endif
-#ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
+#if defined(BBX_TEST_INBOUND_PEER_REQUIREMENT) || defined(BBX_NATIVE_OPERATOR_TRANSFER)
 #include "PeerRequirementGate.h"
+#endif
+#ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
 #if defined(BBX_TEST_NOTES_ISOLATION)
 #error "Inbound peer requirement and OS-isolation diagnostics must be separate."
 #endif
@@ -266,6 +268,16 @@ finish:
     xpc_release(response);
 }
 static void accept_peer(xpc_connection_t peer) {
+#ifdef BBX_NATIVE_OPERATOR_TRANSFER
+    /* Distinct operator-transfer build only. The OS must enforce matching
+       Team ID AND the exact signed host identifier before handler delivery.
+       Never fall back to UID/PID or an unauthenticated connection. */
+    if(bbx_install_same_team_peer_requirement(peer,
+       "dev.agentblackbox.xpc-authority.host")!=0){
+        xpc_connection_cancel(peer);
+        return;
+    }
+#endif
 #ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
     /*
      * Install exactly one OS-enforced signature requirement on each
