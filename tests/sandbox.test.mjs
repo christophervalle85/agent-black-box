@@ -45,6 +45,8 @@ test('Linux plan confines file mounts and denies network via namespace',()=>fixt
 
 test('required mode validates sandbox binary, never falls back to native spawn',()=>fixture(args=>{
   assert.throws(()=>downstreamLaunch({...args,env:{MCP_SANDBOX:'required',MCP_BWRAP_PATH:'/nonexistent/bwrap'},platform:'linux'}),/Bubblewrap unavailable/);
-  assert.throws(()=>downstreamLaunch({...args,env:{MCP_SANDBOX:'required',MCP_BWRAP_PATH:'/nonexistent/bwrap'},platform:'darwin'}),/signed App Sandbox helper/);
+  // On macOS, required mode refuses without explicit native workspace and
+  // independently installed signed host; Linux bwrap never becomes fallback.
+  assert.throws(()=>downstreamLaunch({...args,env:{MCP_SANDBOX:'required',MCP_BWRAP_PATH:'/nonexistent/bwrap'},platform:'darwin'}),/explicitly configured/);
   assert.throws(()=>planMcpSandbox({...args,mode:'auto'}),/MCP_SANDBOX must/);
 }));
