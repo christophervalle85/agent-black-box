@@ -23,7 +23,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #endif
-#if defined(BBX_TEST_INBOUND_PEER_REQUIREMENT) || defined(BBX_NATIVE_OPERATOR_TRANSFER)
+#if defined(BBX_TEST_INBOUND_PEER_REQUIREMENT) || defined(BBX_NATIVE_OPERATOR_TRANSFER) || defined(BBX_NATIVE_REQUIRED_MCP)
 #include "PeerRequirementGate.h"
 #endif
 #ifdef BBX_TEST_INBOUND_PEER_REQUIREMENT
@@ -258,8 +258,10 @@ static void message(xpc_connection_t peer,xpc_object_t incoming) {
             }
         }
         close(file);
+#ifndef BBX_NATIVE_REQUIRED_MCP
     }else if(strcmp(op,"cleanup_test_note")==0) {
         xpc_dictionary_set_bool(response,"ok",unlinkat(dir,name,0)==0);
+#endif
     }
 close_dir:
     close(dir);
@@ -268,8 +270,8 @@ finish:
     xpc_release(response);
 }
 static void accept_peer(xpc_connection_t peer) {
-#ifdef BBX_NATIVE_OPERATOR_TRANSFER
-    /* Distinct operator-transfer build only. The OS must enforce matching
+#if defined(BBX_NATIVE_OPERATOR_TRANSFER) || defined(BBX_NATIVE_REQUIRED_MCP)
+    /* Native operator and required MCP builds. The OS must enforce matching
        Team ID AND the exact signed host identifier before handler delivery.
        Never fall back to UID/PID or an unauthenticated connection. */
     if(bbx_install_same_team_peer_requirement(peer,
