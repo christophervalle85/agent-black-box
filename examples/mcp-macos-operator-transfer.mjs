@@ -228,9 +228,10 @@ async function main(){
       throw Error('Native transfer rejected without an accepted receipt.');
     }
     let evidence;
-    try{evidence=assessOperatorTransfer(fixtureImport?'import':mode,
-      observed,{requestedName:fixtureImport?null:name});
-    catch{
+    try{
+      evidence=assessOperatorTransfer(fixtureImport?'import':mode,
+        observed,{requestedName:fixtureImport?null:name});
+    }catch{
       auditEvent(store,'MAC_OPERATOR_TRANSFER_UNCERTAIN','block','error',
         'No authenticated end-to-end native receipt; possible write must not be automatically retried.');
       throw Error('Unknown native transfer outcome; manually reconcile, NEVER retry automatically.');
