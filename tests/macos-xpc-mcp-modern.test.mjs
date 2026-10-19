@@ -39,5 +39,9 @@ test('Phase 3B acceptance still uses disposable HMAC records and verified XPC bo
  assert.match(script,/audit\.includes\(content\)/);
  assert.match(script,/syntheticName&&nativeRoot/);
  assert.match(script,/MCP_SANDBOX:'off'/);
- assert.match(script,/if\(process\.env\.MCP_SANDBOX==='required'\)/);
+ assert.match(script,/if\(requiredInstalled&&process\.env\.MCP_SANDBOX!=='required'\)/);
+ assert.match(script,/if\(!requiredInstalled&&process\.env\.MCP_SANDBOX==='required'\)/);
+ assert.match(script,/gateway=await startGateway\(requiredInstalled\?/);
+ assert.match(script,/verifyMacRequiredInstallation/);
+ assert.match(script,/probeMacRequiredWorkspace/);
 });
