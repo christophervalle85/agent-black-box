@@ -45,3 +45,20 @@ test('probe is compiled only into a disposable AuthorityNotesService build, not 
   assert.match(script,/MCP_SANDBOX!=='off'/);
   assert.doesNotMatch(original,/BBX_TEST_NOTES_ISOLATION/);
 });
+
+test('required MCP worker OS-denial probe uses signed same-Team XPC and keeps diagnostics out of the installed app',()=>{
+  const script=source('../examples/mcp-macos-xpc-notes-isolation.mjs');
+  const installer=source('../examples/mcp-macos-native-required.mjs');
+  const worker=source('../native/macos/xpc/AuthorityNotesService.m');
+  const packageFile=JSON.parse(source('../package.json'));
+  assert.equal(packageFile.scripts['mcp:mac-native-required-isolation'],
+    'node examples/mcp-macos-xpc-notes-isolation.mjs --required-signed');
+  assert.ok(script.includes("process.argv[2]==='--required-signed'"));
+  assert.ok(script.includes("requiredSigned?selectLocalDevelopmentIdentity("));
+  assert.ok(script.includes("['-DBBX_NATIVE_REQUIRED_MCP=1']"));
+  assert.ok(script.includes("parseSignedIdentity(team(app)"));
+  assert.ok(script.includes("parseSignedIdentity(team(service)"));
+  assert.ok(worker.includes("bbx_install_same_team_peer_requirement(peer,"));
+  assert.ok(installer.includes("'-DBBX_NATIVE_REQUIRED_MCP=1'"));
+  assert.ok(!installer.includes("'-DBBX_TEST_NOTES_ISOLATION=1'"));
+});
