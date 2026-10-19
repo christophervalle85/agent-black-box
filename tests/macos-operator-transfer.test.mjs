@@ -52,7 +52,7 @@ test('operator-only native file capability is not exposed in normal macOS requir
   assert.match(script,/MAC_OPERATOR_TRANSFER_NATIVE_RECEIPT/);
   assert.match(script,/new AuditStore/);
   assert.doesNotMatch(gateway,/operator[_-]transfer|native\.operator\.transfer/);
-  assert.match(worker,/#ifdef BBX_NATIVE_OPERATOR_TRANSFER/);
+  assert.match(worker,/#if defined\(BBX_NATIVE_OPERATOR_TRANSFER\) \|\| defined\(BBX_NATIVE_REQUIRED_MCP\)/);
   assert.match(worker,/bbx_install_same_team_peer_requirement\(peer,/);
   assert.match(worker,/dev\.agentblackbox\.xpc-authority\.host/);
   assert.match(build,/NSOpenPanel \*panel=\[NSOpenPanel openPanel\]/);
@@ -124,8 +124,10 @@ test('native import failure reasons are strict, fixed and pre-dispatch only',()=
 test('generated import fixture is selected by exact inode and never bypasses native panel',()=>{
   const native=source('native/macos/xpc/OperatorTransferHost.m');
   const script=source('examples/mcp-macos-operator-transfer.mjs');
-  assert.ok(script.includes("const fixtureImport=mode==='fixture-import'"));
-  assert.ok(script.includes("writeFileSync(fixture,'BBX disposable operator transfer fixture"));
+  assert.ok(script.includes("const fixtureImport=['fixture-import','fixture-oversize','fixture-cancel']"));
+  assert.ok(script.includes('.includes(mode)&&process.argv.length===3;'));
+  assert.ok(script.includes("writeFileSync(fixture,mode==='fixture-oversize'?'X'.repeat(2001):"));
+  assert.ok(script.includes("'BBX disposable operator transfer fixture"));
   assert.ok(script.includes("fixtureImport?['import-fixture',fixture]"));
   assert.ok(native.includes('panel.directoryURL=[NSURL fileURLWithPath:'));
   assert.ok(native.includes('if([panel runModal]!=NSModalResponseOK)return 83;'));
