@@ -1,11 +1,12 @@
 /**
  * Experimental MCP downstream over the signed native App Sandbox/XPC note
  * worker. Only synthetic bbx-test-*.txt content, NOT production user data.
- * This process itself is NOT sandboxed. It delegates the only file operations
- * to the separately signed native host, whose worker owns the Documents root.
- *
- * No connection to the main gateway unless deliberately injected by the
- * isolated acceptance harness. Never use this with MCP_SANDBOX=required.
+ * This Node control-plane subprocess itself is NOT sandboxed. It delegates
+ * the only file operations to the signed native XPC host/worker. In required
+ * mode, the gateway verifies a separately pinned Apple Team/signature and
+ * exact sandbox workspace BEFORE spawning this fixed control-plane adapter.
+ * The normal off-mode acceptance harness is retained separately. No generic
+ * model-directed host filesystem access, shell, transport or export is added.
  */
 import {spawn} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
@@ -19,7 +20,9 @@ const names=Object.freeze([
   inputSchema:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},
     required:['path','content'],additionalProperties:false}}
 ]);
-const host=process.env.BLACKBOX_EXPERIMENTAL_XPC_HOST;
+const nativeRequired=process.env.MCP_SANDBOX==='required';
+const host=nativeRequired?process.env.BLACKBOX_NATIVE_REQUIRED_XPC_HOST:
+  process.env.BLACKBOX_EXPERIMENTAL_XPC_HOST;
 const EXAMPLE_ERA='2025-11-25';
 const nativeTimeout=process.env.BLACKBOX_XPC_TEST_FAULT==='1'?2500:8500;
 let initialized=false;
@@ -139,8 +142,10 @@ async function dispatch(message) {
   }
 }
 if(process.argv[1] && new URL('file://'+process.argv[1]).href===import.meta.url) {
-  if(process.platform!=='darwin'||process.env.MCP_SANDBOX!=='off'||!host||!host.startsWith('/')){
-    console.error('Native MCP test downstream requires explicit macOS off-mode fixture and signed host.');
+  if(process.platform!=='darwin'||!['required','off'].includes(process.env.MCP_SANDBOX)||
+     !host||!host.startsWith('/')||
+     (nativeRequired&&process.env.BLACKBOX_EXPERIMENTAL_XPC_HOST)){
+    console.error('Native MCP adapter requires verified native host; refusing untrusted launch.');
     process.exitCode=1;
   }else{
     installNativeHostSupervisor();
