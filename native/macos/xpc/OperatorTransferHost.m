@@ -1,0 +1,256 @@
+/*
+ * v0.8 OPERATOR-ONLY experimental import/export, never an MCP tool.
+ * The human selects the source/destination in AppKit. No Node/model-provided
+ * host path, security bookmark, destination or approval token is accepted.
+ * The only worker capability is allowlisted bbx-test-*.txt in its sandbox
+ * Documents root. The worker independently enforces signed host identity.
+ *
+ * Import: selected fd -> bounded UTF-8 immutable snapshot -> fresh Touch ID
+ * -> sandboxed XPC exclusive create -> exact worker readback.
+ * Export: worker-owned test note -> NSSavePanel -> fresh Touch ID ->
+ * O_EXCL/O_NOFOLLOW new file -> fsync. No overwrite or silent retry.
+ *
+ * This does NOT use the test-only fixed-byte RSA signing authority. Native
+ * operator confirmation is real, but production authorization/Keychain ACL,
+ * remote MCP policy, source race immunity and recovery are not established.
+ */
+#define __STDC_WANT_LIB_EXT1__ 1
+#import <AppKit/AppKit.h>
+#import <Foundation/Foundation.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+#include <xpc/xpc.h>
+#include <dispatch/dispatch.h>
+#include <CommonCrypto/CommonDigest.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
+#include <limits.h>
+
+static const char serviceName[]="dev.agentblackbox.xpc-authority.worker";
+static bool safeName(const char *text){
+    if(!text)return false;
+    size_t n=strnlen(text,80);
+    if(n<14||n>64||strncmp(text,"bbx-test-",9)!=0||
+       strcmp(text+n-4,".txt")!=0)return false;
+    for(size_t i=9;i<n-4;i++){
+        const char c=text[i];
+        if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||
+             (c>='0'&&c<='9')||(c>='A'&&c<='Z')||
+             c=='_'||c=='-'))return false;
+    }
+    return true;
+}
+static void sha256Hex(NSData *data,char hash[65]){
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH]={0};
+    CC_SHA256([data bytes],(CC_LONG)[data length],digest);
+    const char alphabet[]="0123456789abcdef";
+    for(int i=0;i<CC_SHA256_DIGEST_LENGTH;i++){
+        hash[2*i]=alphabet[digest[i]>>4];
+        hash[2*i+1]=alphabet[digest[i]&15];
+    }
+    hash[64]='\0';
+}
+static bool deviceOwnerConsent(NSString *operation,const char *name,
+                               size_t length,const char *digest){
+    LAContext *context=[LAContext new];
+    context.touchIDAuthenticationAllowableReuseDuration=0;
+    NSError *available=nil;
+    if(![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+                            error:&available])return false;
+    NSString *why=[NSString stringWithFormat:
+        @"Agent Black Box test %@: %s, %zu bytes, SHA256 %.12s. No other files.",
+        operation,name,length,digest];
+    dispatch_semaphore_t done=dispatch_semaphore_create(0);
+    __block BOOL approved=NO;
+    [context evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+            localizedReason:why reply:^(BOOL ok,NSError *error){
+                approved=ok&&error==nil;
+                dispatch_semaphore_signal(done);
+            }];
+    const long timeout=dispatch_semaphore_wait(
+        done,dispatch_time(DISPATCH_TIME_NOW,40*NSEC_PER_SEC));
+    [context invalidate];
+    return timeout==0&&approved;
+}
+static NSData *selectedRegularText(NSURL *url){
+    if(!url||![url isFileURL])return nil;
+    const char *path=[url fileSystemRepresentation];
+    if(!path||path[0]!='/'||strnlen(path,PATH_MAX)>=PATH_MAX)return nil;
+    const int fd=open(path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+    if(fd<0)return nil;
+    struct stat before={0},after={0};
+    NSData *data=nil;
+    if(fstat(fd,&before)==0 && S_ISREG(before.st_mode) &&
+       before.st_uid==geteuid() && before.st_nlink==1 &&
+       before.st_size>0 && before.st_size<=2000){
+        unsigned char bytes[2001]={0};
+        size_t used=0;
+        while(used<(size_t)before.st_size){
+            ssize_t n=read(fd,bytes+used,(size_t)before.st_size-used);
+            if(n<=0)break;
+            used+=(size_t)n;
+        }
+        unsigned char extra=0;
+        if(used==(size_t)before.st_size&&read(fd,&extra,1)==0&&
+           fstat(fd,&after)==0&&before.st_dev==after.st_dev&&
+           before.st_ino==after.st_ino&&
+           before.st_size==after.st_size&&
+           before.st_mtimespec.tv_sec==after.st_mtimespec.tv_sec&&
+           before.st_mtimespec.tv_nsec==after.st_mtimespec.tv_nsec&&
+           memchr(bytes,0,used)==NULL){
+            NSData *candidate=[NSData dataWithBytes:bytes length:used];
+            if([[NSString alloc] initWithData:candidate
+                         encoding:NSUTF8StringEncoding])data=candidate;
+        }
+        memset(bytes,0,sizeof(bytes));
+    }
+    if(close(fd)!=0)return nil;
+    return data;
+}
+static xpc_object_t request(xpc_connection_t peer,const char *method,
+                            const char *note,const char *content){
+    if(!peer||!method||!safeName(note))return NULL;
+    xpc_object_t msg=xpc_dictionary_create(NULL,NULL,0);
+    if(!msg)return NULL;
+    xpc_dictionary_set_string(msg,"method",method);
+    xpc_dictionary_set_string(msg,"path",note);
+    if(content)xpc_dictionary_set_string(msg,"content",content);
+    /* The harness supervises this blocked native process. A lost reply
+       after a possible write is UNKNOWN, never a legitimate retry. */
+    xpc_object_t reply=xpc_connection_send_message_with_reply_sync(peer,msg);
+    xpc_release(msg);
+    if(!reply||xpc_get_type(reply)!=XPC_TYPE_DICTIONARY){
+        if(reply)xpc_release(reply);
+        return NULL;
+    }
+    return reply;
+}
+static BOOL accepted(xpc_object_t reply){
+    return reply&&xpc_get_type(reply)==XPC_TYPE_DICTIONARY &&
+           xpc_dictionary_get_bool(reply,"ok") &&
+           xpc_dictionary_get_int64(reply,"workerPID")>0 &&
+           xpc_dictionary_get_int64(reply,"workerPID")!=(int64_t)getpid();
+}
+static NSData *readNote(xpc_connection_t peer,const char *name){
+    xpc_object_t r=request(peer,"read_note",name,NULL);
+    NSData *result=nil;
+    if(accepted(r)){
+        const char *value=xpc_dictionary_get_string(r,"content");
+        if(value){
+            size_t count=strnlen(value,2001);
+            if(count>0&&count<=2000)result=[NSData dataWithBytes:value length:count];
+        }
+    }
+    if(r)xpc_release(r);
+    return result;
+}
+static int importSelected(xpc_connection_t peer){
+    NSOpenPanel *panel=[NSOpenPanel openPanel];
+    panel.canChooseFiles=YES;
+    panel.canChooseDirectories=NO;
+    panel.allowsMultipleSelection=NO;
+    panel.resolvesAliases=NO;
+    panel.message=@"Select ONE small, non-sensitive UTF-8 text file (1–2000 bytes).";
+    if([panel runModal]!=NSModalResponseOK)return 83;
+    NSData *snapshot=selectedRegularText([panel URLs].firstObject);
+    if(!snapshot)return 87;
+    NSString *uuid=[[[NSUUID UUID] UUIDString] lowercaseString];
+    NSString *name=[NSString stringWithFormat:@"bbx-test-%@.txt",uuid];
+    const char *note=[name UTF8String];
+    char digest[65]={0};
+    sha256Hex(snapshot,digest);
+    if(!safeName(note))return 87;
+    NSString *text=[[NSString alloc] initWithData:snapshot
+                                        encoding:NSUTF8StringEncoding];
+    if(!text||[text length]==0)return 87;
+    if(!deviceOwnerConsent(@"IMPORT",note,[snapshot length],digest))return 83;
+    /* No host filesystem paths cross the XPC boundary. */
+    xpc_object_t response=request(peer,"write_note",note,[text UTF8String]);
+    const BOOL committed=accepted(response);
+    if(response)xpc_release(response);
+    if(!committed)return 89; // unknown after possible worker commit
+    NSData *readback=readNote(peer,note);
+    if(!readback||![snapshot isEqualToData:readback])return 89;
+    printf("BBX_OPERATOR_IMPORT_COMMITTED %s %zu %s\n",
+           note,(size_t)[snapshot length],digest);
+    fflush(stdout);
+    return 0;
+}
+static int exclusiveExport(NSData *payload,NSURL *url){
+    if(!url||![url isFileURL])return 87;
+    const char *path=[url fileSystemRepresentation];
+    if(!path||path[0]!='/'||strnlen(path,PATH_MAX)>=PATH_MAX)return 87;
+    /* No overwrite, symlink-follow, or implicit permission to modify an
+       existing user file. A partial created file is left for reconciliation. */
+    int fd=open(path,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+    if(fd<0)return 87;
+    int status=0;
+    size_t off=0;
+    const unsigned char *data=[payload bytes];
+    while(off<[payload length]){
+        ssize_t n=write(fd,data+off,[payload length]-off);
+        if(n<=0){status=89;break;}
+        off+=(size_t)n;
+    }
+    if(status==0&&fsync(fd)!=0)status=89;
+    if(close(fd)!=0)status=89;
+    if(status!=0)return status;
+    NSString *folder=[[url URLByDeletingLastPathComponent] path];
+    int dir=open([folder fileSystemRepresentation],
+                 O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    if(dir<0)return 89;
+    if(fsync(dir)!=0)status=89;
+    if(close(dir)!=0)status=89;
+    return status;
+}
+static int exportSelected(xpc_connection_t peer,const char *name){
+    if(!safeName(name))return 87;
+    NSData *content=readNote(peer,name);
+    if(!content)return 87;
+    NSString *check=[[NSString alloc] initWithData:content
+                                          encoding:NSUTF8StringEncoding];
+    if(!check)return 87;
+    char digest[65]={0};
+    sha256Hex(content,digest);
+    NSSavePanel *panel=[NSSavePanel savePanel];
+    panel.nameFieldStringValue=[NSString stringWithUTF8String:name];
+    panel.message=@"Choose a NEW destination file for this test note. Existing files cannot be overwritten.";
+    if([panel runModal]!=NSModalResponseOK)return 83;
+    NSURL *selected=[panel URL];
+    if(!selected||![selected isFileURL])return 87;
+    // SavePanel may show replace confirmation; explicit O_EXCL still denies.
+    if(!deviceOwnerConsent(@"EXPORT",name,[content length],digest))return 83;
+    const int outcome=exclusiveExport(content,selected);
+    if(outcome!=0)return outcome;
+    printf("BBX_OPERATOR_EXPORT_COMMITTED %s %zu %s\n",
+           name,(size_t)[content length],digest);
+    fflush(stdout);
+    return 0;
+}
+int main(int argc,const char *argv[]){
+    @autoreleasepool {
+        if(argc<2||argc>3)return 90;
+        const BOOL importing=argc==2&&strcmp(argv[1],"import")==0;
+        const BOOL exporting=argc==3&&strcmp(argv[1],"export")==0&&
+                             safeName(argv[2]);
+        if(!importing&&!exporting)return 90;
+        [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        [NSApp activateIgnoringOtherApps:YES];
+        xpc_connection_t peer=xpc_connection_create(serviceName,
+                   dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0));
+        if(!peer)return 87;
+        xpc_connection_set_event_handler(peer,^(xpc_object_t event){
+            (void)event; // request() validates each reply explicitly.
+        });
+        xpc_connection_resume(peer);
+        int result=importing?importSelected(peer):exportSelected(peer,argv[2]);
+        xpc_connection_cancel(peer);
+        xpc_release(peer);
+        return result;
+    }
+}
