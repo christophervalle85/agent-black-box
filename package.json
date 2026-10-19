@@ -50,7 +50,8 @@
     "mcp:mac-xpc-inbound-signed": "node examples/mcp-macos-xpc-inbound-signed.mjs",
     "mcp:mac-xpc-native-reviewed": "node examples/mcp-macos-xpc-native-reviewed.mjs",
     "mcp:mac-controller-key": "node examples/mcp-macos-controller-keychain.mjs",
-    "mcp:mac-operator-transfer": "node examples/mcp-macos-operator-transfer.mjs"
+    "mcp:mac-operator-transfer": "node examples/mcp-macos-operator-transfer.mjs",
+    "mcp:mac-native-required": "node examples/mcp-macos-native-required.mjs"
   },
   "license": "MIT"
 }
