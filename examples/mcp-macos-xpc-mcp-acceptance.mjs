@@ -19,13 +19,17 @@ import {startGateway} from '../src/mcp-gateway.mjs';
 import {readJsonLines,sendJsonLine} from '../src/mcp-wire.mjs';
 import {frameBridgeRequest,parseBridgeReply} from '../src/macos-xpc-bridge-wire.mjs';
 import {validateMacWorkspaceBinding} from '../src/macos-workspace-binding.mjs';
+import {verifyMacRequiredInstallation,probeMacRequiredWorkspace}
+  from '../src/macos-required-mcp.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const sources=join(root,'native','macos','xpc');
 const args=process.argv.slice(2);
-if(args.some(arg=>arg!=='--modern')||args.filter(arg=>arg==='--modern').length>1)
-  throw Error('Usage: npm run mcp:mac-xpc-mcp-acceptance [-- --modern]');
+if(args.some(arg=>!['--modern','--required-installed'].includes(arg))||
+   new Set(args).size!==args.length)
+  throw Error('Usage: npm run mcp:mac-xpc-mcp-acceptance [-- --modern --required-installed]');
 const modernMode=args.includes('--modern');
+const requiredInstalled=args.includes('--required-installed');
 const MODERN='2026-07-28';
 const META=Object.freeze({
   'io.modelcontextprotocol/protocolVersion':MODERN,
@@ -120,16 +124,25 @@ async function decide(port,id,decision){
 }
 async function main(){
   if(process.platform!=='darwin')throw Error('Phase 3A/3B requires real macOS.');
-  if(process.env.MCP_SANDBOX==='required')
-    throw Error('MCP_SANDBOX=required is NOT available on macOS; no fallback.');
-  command('/usr/bin/xcrun',['--find','clang'],'Native Xcode compiler');
+  if(requiredInstalled&&process.env.MCP_SANDBOX!=='required')
+    throw Error('Signed required-mode acceptance requires explicit MCP_SANDBOX=required.');
+  if(!requiredInstalled&&process.env.MCP_SANDBOX==='required')
+    throw Error('Disposable synthetic acceptance cannot run in required mode.');
+  if(!requiredInstalled)
+    command('/usr/bin/xcrun',['--find','clang'],'Native Xcode compiler');
   const directory=mkdtempSync(join(tmpdir(),'bb-mcp-xpc-phase3-'));
   const app=join(directory,'BlackBoxAuthorityHost.app');
-  const host=join(app,'Contents','MacOS','BlackBoxAuthorityHost');
+  let host=join(app,'Contents','MacOS','BlackBoxAuthorityHost');
   const bundle=join(app,'Contents','XPCServices','BlackBoxAuthorityWorker.xpc');
   const worker=join(bundle,'Contents','MacOS','BlackBoxAuthorityWorker');
   let controller, gateway, client, input, output, syntheticName=null, nativeRoot=null;
   try{
+    if(requiredInstalled){
+      const verified=verifyMacRequiredInstallation();
+      host=verified.host;
+      nativeRoot=probeMacRequiredWorkspace(host);
+      console.log('PASS: Previously installed, independently pinned signed native MCP host and sandboxed worker verified.');
+    }else{
     mkdirSync(dirname(host),{recursive:true});
     mkdirSync(dirname(worker),{recursive:true});
     copyFileSync(join(sources,'AuthorityHost-Info.plist'),join(app,'Contents','Info.plist'));
@@ -148,6 +161,7 @@ async function main(){
     const location=await nativeResult(host,Buffer.from('ROOT - 0\n','ascii'));
     if(!location.ok)throw Error('Native service did not report a workspace.');
     nativeRoot=location.content;
+    }
     const unrelated=join(root,'demo-workspace');
     let mismatch=false;
     try{validateMacWorkspaceBinding({configuredRoot:unrelated,reportedRoot:nativeRoot});}
@@ -166,15 +180,17 @@ async function main(){
     client=clientFor(input,output);
     const testEnv={MCP_WORKSPACE_ROOT:nativeRoot,MCP_AUDIT_FILE:auditFile,
       MCP_CONTROLLER_PORT:String(port),MCP_TOKEN_FILE:controller.tokenFile,
-      MCP_SANDBOX:'off'};
+      MCP_SANDBOX:requiredInstalled?'required':'off'};
     const childEnv={PATH:'/usr/bin:/bin',HOME:homedir(),TMPDIR:tmpdir(),LANG:'C.UTF-8',
       MCP_SANDBOX:'off',BLACKBOX_EXPERIMENTAL_XPC_HOST:host,
       BLACKBOX_WORKSPACE_ROOT:nativeRoot};
-    gateway=await startGateway({input,output,env:testEnv,experimentalLaunch:{
-      command:process.execPath,
-      args:[join(root,'examples','mcp-macos-xpc-mcp-downstream.mjs')],
-      env:childEnv,description:'EXPERIMENTAL native XPC synthetic-only acceptance'
-    }});
+    gateway=await startGateway(requiredInstalled?
+      {input,output,env:testEnv}:
+      {input,output,env:testEnv,experimentalLaunch:{
+        command:process.execPath,
+        args:[join(root,'examples','mcp-macos-xpc-mcp-downstream.mjs')],
+        env:childEnv,description:'EXPERIMENTAL native XPC synthetic-only acceptance'
+      }});
     // Real client-visible MCP calls use the same gateway and downstream.
     // Modern requests carry per-request metadata; no legacy handshake.
     const request=(method,params={})=>client.send(method,
@@ -268,17 +284,23 @@ async function main(){
       !audit.includes('DENY_PATH_ESCAPE'))
       throw Error('Fresh HMAC audit history incomplete or contains full note contents.');
     console.log('PASS: Fresh authenticated audit contains denials, approval and result without note contents.');
-    console.log('PASS: Experimental '+(modernMode?'modern':'legacy')+
-      ' MCP→policy→approval→XPC→audit acceptance passed (synthetic-only).');
-    console.log('NOTE: This is NOT production macOS required-mode or independent code-signing attestation.');
+    console.log('PASS: '+(requiredInstalled?'Signed macOS required-mode':'Experimental')+
+      ' '+(modernMode?'modern':'legacy')+
+      ' MCP→policy→approval→XPC→audit acceptance passed (bounded synthetic notes).');
+    console.log(requiredInstalled?
+      'NOTE: Actual macOS required-mode uses a pinned Apple Development app and XPC worker for synthetic note operations. It is not production Developer ID distribution, independently trusted Node audit, or arbitrary file import/export.':
+      'NOTE: This disposable test is NOT macOS required-mode or independent code-signing attestation.');
   }finally{
     if(gateway)gateway.close();
     if(client)client.close();
     if(input)input.end();
     if(output)output.end();
-    if(syntheticName&&nativeRoot){
+    if(syntheticName&&nativeRoot&&!requiredInstalled){
       try{await nativeResult(host,frameBridgeRequest('REMOVE',syntheticName));}catch{}
     }
+    // Signed required-mode workers intentionally reject DELETE. The
+    // bounded random acceptance note remains for manual review; no
+    // unauthorized cleanup or teardown privilege is introduced.
     if(controller){
       controller.approvalQueue.close();
       await new Promise(r=>controller.server.close(r));
@@ -287,5 +309,5 @@ async function main(){
     rmSync(directory,{recursive:true,force:true});
   }
 }
-main().catch(e=>{console.error('EXPERIMENTAL MCP-XPC ACCEPTANCE FAILED: '+e.message);
+main().catch(e=>{console.error('MACOS MCP-XPC ACCEPTANCE FAILED: '+e.message);
   process.exitCode=1;});
