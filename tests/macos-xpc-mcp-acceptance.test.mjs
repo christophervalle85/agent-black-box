@@ -38,7 +38,9 @@ test('MCP test adapter can only address the test namespace, no shell requests',(
 test('acceptance harness uses actual gateway, approval controller, isolated HMAC audit and native worker',()=>{
   const harness=readFileSync(new URL('../examples/mcp-macos-xpc-mcp-acceptance.mjs',import.meta.url),'utf8');
   const adapter=readFileSync(new URL('../examples/mcp-macos-xpc-mcp-downstream.mjs',import.meta.url),'utf8');
-  assert.match(harness,/startGateway\(\{input,output,env:testEnv,experimentalLaunch/);
+  assert.match(harness,/startGateway\(requiredInstalled\?/);
+  assert.match(harness,/env:testEnv,experimentalLaunch/);
+  assert.match(harness,/MCP_SANDBOX:requiredInstalled\?'required':'off'/);
   assert.match(harness,/createBlackBoxServer\(\{dataFile:auditFile,workspaceRoot:nativeRoot/);
   assert.match(harness,/validateMacWorkspaceBinding/);
   assert.match(harness,/\/api\/approvals\//);
