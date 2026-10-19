@@ -163,7 +163,8 @@ async function main(){
     throw Error('Explicit MCP_SANDBOX=off required; normal MCP gateway is unchanged.');
   const mode=process.argv[2],name=process.argv[3]??null;
   const buildOnly=mode==='build-check'&&process.argv.length===3;
-  const fixtureImport=mode==='fixture-import'&&process.argv.length===3;
+  const fixtureImport=['fixture-import','fixture-oversize','fixture-cancel']
+    .includes(mode)&&process.argv.length===3;
   if(!buildOnly&&!fixtureImport&&(!(['import','export'].includes(mode))||
      (mode==='import'&&process.argv.length!==3)||
      (mode==='export'&&(process.argv.length!==4||!note.test(name)))))
@@ -184,7 +185,8 @@ async function main(){
     const fixture=fixtureImport?
       join(temp,'bbx-test-operator-fixture.txt'):null;
     if(fixture!==null)
-      writeFileSync(fixture,'BBX disposable operator transfer fixture\n',
+      writeFileSync(fixture,mode==='fixture-oversize'?'X'.repeat(2001):
+        'BBX disposable operator transfer fixture\n',
         {mode:0o600,flag:'wx'});
     const folder=join(homedir(),'Library','Application Support',
                       'AgentBlackBox','OperatorTransfer');
@@ -195,7 +197,11 @@ async function main(){
     auditEvent(store,'MAC_OPERATOR_TRANSFER_OPENED','review','pending',
       'Separate signed native operator transfer initiated; no operation claimed.');
     console.log('PASS: Native operator host and sandboxed XPC worker verified with matching Apple Team ID; worker requires OS-verified incoming host.');
-    console.log(fixtureImport?
+    console.log(mode==='fixture-cancel'?
+      'ACTION: Click Cancel in the native file picker. Do NOT select a file or approve Touch ID.':
+      mode==='fixture-oversize'?
+      'ACTION: Select ONLY bbx-test-operator-fixture.txt (2001 bytes). It MUST deny before Touch ID/XPC.':
+      fixtureImport?
       'ACTION: Select ONLY bbx-test-operator-fixture.txt from the opened private test directory; approve Touch ID only for this generated fixture.':
       mode==='import'?
       'ACTION: Select one small, NON-SENSITIVE text file in the native Open Panel and approve fresh Touch ID.':
@@ -209,6 +215,8 @@ async function main(){
        observed.stdout===''&&observed.stderr===''){
       auditEvent(store,'MAC_OPERATOR_TRANSFER_CANCELLED','block','blocked',
         'Native picker or native biometric consent explicitly cancelled.');
+      if(mode==='fixture-oversize')
+        throw Error('Oversized file must be explicitly rejected, not cancelled.');
       console.log('PASS: Operator cancellation denied the transfer; no receipt accepted.');
       return;
     }
@@ -218,8 +226,17 @@ async function main(){
       auditEvent(store,'MAC_OPERATOR_TRANSFER_DENIED','block','blocked',
         'Native pre-dispatch file selection denied at '+reason+
         '; no XPC file write was attempted.');
+      if(mode==='fixture-oversize'&&reason==='SOURCE_SIZE'){
+        console.log('PASS: Exact selected 2001-byte fixture rejected before Touch ID and XPC dispatch; HMAC denial recorded.');
+        return;
+      }
       throw Error('Native import safely rejected before XPC dispatch: '+reason+
         '. No file path or contents were logged.');
+    }
+    if(mode==='fixture-oversize'||mode==='fixture-cancel'){
+      auditEvent(store,'MAC_OPERATOR_TRANSFER_UNEXPECTED','block','error',
+        'Negative fixture unexpectedly progressed beyond its specified denial.');
+      throw Error('Negative fixture did not produce required explicit denial.');
     }
     if(observed.status===87&&!observed.error&&!observed.signal&&
        observed.stdout===''&&observed.stderr===''){
