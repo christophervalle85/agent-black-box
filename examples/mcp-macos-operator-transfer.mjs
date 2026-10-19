@@ -11,7 +11,7 @@
  * and audit keys are still same-user local, not independent trust anchors.
  */
 import {spawnSync} from 'node:child_process';
-import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync,readFileSync} from 'node:fs';
 import {homedir,tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -165,10 +165,12 @@ async function main(){
   const buildOnly=mode==='build-check'&&process.argv.length===3;
   const fixtureImport=['fixture-import','fixture-oversize','fixture-cancel']
     .includes(mode)&&process.argv.length===3;
-  if(!buildOnly&&!fixtureImport&&(!(['import','export'].includes(mode))||
+  const rejectOverwrite=mode==='fixture-export-overwrite'&&
+    process.argv.length===4&&note.test(name??'');
+  if(!buildOnly&&!fixtureImport&&!rejectOverwrite&&(!(['import','export'].includes(mode))||
      (mode==='import'&&process.argv.length!==3)||
      (mode==='export'&&(process.argv.length!==4||!note.test(name)))))
-    throw Error('Use build-check, fixture-import, import, or export followed by the EXACT bbx-test-UUID.txt printed after a successful import.');
+    throw Error('Use build-check, fixture-import, fixture-cancel, fixture-oversize, import, export <note>, or fixture-export-overwrite <note>.');
   const identity=selectLocalDevelopmentIdentity(command('/usr/bin/security',[
     'find-identity','-v','-p','codesigning'
   ],'Apple Development identity lookup').stdout);
@@ -188,6 +190,11 @@ async function main(){
       writeFileSync(fixture,mode==='fixture-oversize'?'X'.repeat(2001):
         'BBX disposable operator transfer fixture\n',
         {mode:0o600,flag:'wx'});
+    const existing=rejectOverwrite?
+      join(temp,'bbx-test-preexisting.txt'):null;
+    const existingBytes='BBX existing destination preserved\n';
+    if(existing!==null)
+      writeFileSync(existing,existingBytes,{mode:0o600,flag:'wx'});
     const folder=join(homedir(),'Library','Application Support',
                       'AgentBlackBox','OperatorTransfer');
     mkdirSync(folder,{recursive:true,mode:0o700});
@@ -197,7 +204,9 @@ async function main(){
     auditEvent(store,'MAC_OPERATOR_TRANSFER_OPENED','review','pending',
       'Separate signed native operator transfer initiated; no operation claimed.');
     console.log('PASS: Native operator host and sandboxed XPC worker verified with matching Apple Team ID; worker requires OS-verified incoming host.');
-    console.log(mode==='fixture-cancel'?
+    console.log(rejectOverwrite?
+      'ACTION: Verify the native host refuses exclusive export onto a disposable preexisting file. No picker or Touch ID is needed for the negative test.':
+      mode==='fixture-cancel'?
       'ACTION: Click Cancel in the native file picker. Do NOT select a file or approve Touch ID.':
       mode==='fixture-oversize'?
       'ACTION: Select ONLY bbx-test-operator-fixture.txt (2001 bytes). It MUST deny before Touch ID/XPC.':
@@ -206,11 +215,27 @@ async function main(){
       mode==='import'?
       'ACTION: Select one small, NON-SENSITIVE text file in the native Open Panel and approve fresh Touch ID.':
       'ACTION: Choose a NEW export destination in the Save Panel and approve fresh Touch ID. Existing files are never overwritten.');
-    const observed=spawnSync(host,fixtureImport?['import-fixture',fixture]:
+    const observed=spawnSync(host,rejectOverwrite?
+      ['export-overwrite-test',name,existing]:
+      fixtureImport?['import-fixture',fixture]:
       mode==='import'?[mode]:[mode,name],{
       encoding:'utf8',timeout:130000,maxBuffer:4096,
       env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
     });
+    if(rejectOverwrite){
+      if(!observed.error&&!observed.signal&&observed.status===0&&
+         observed.stdout==='BBX_OPERATOR_EXPORT_OVERWRITE_DENIED\n'&&
+         observed.stderr===''&&
+         readFileSync(existing,'utf8')===existingBytes){
+        auditEvent(store,'MAC_OPERATOR_TRANSFER_OVERWRITE_DENIED','block','blocked',
+          'Existing exclusive-export fixture retained exact original bytes; no write or overwrite accepted.');
+        console.log('PASS: Native signed XPC export rejected the existing destination and verified unchanged original fixture bytes.');
+        return;
+      }
+      auditEvent(store,'MAC_OPERATOR_TRANSFER_UNCERTAIN','block','error',
+        'Existing export fixture was not proven unchanged; investigate manually.');
+      throw Error('Native exclusive-export overwrite negative acceptance failed.');
+    }
     if(observed.status===83&&!observed.error&&!observed.signal&&
        observed.stdout===''&&observed.stderr===''){
       auditEvent(store,'MAC_OPERATOR_TRANSFER_CANCELLED','block','blocked',
