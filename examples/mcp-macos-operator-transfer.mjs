@@ -236,12 +236,19 @@ async function main(){
         'Existing export fixture was not proven unchanged; investigate manually.');
       throw Error('Native exclusive-export overwrite negative acceptance failed.');
     }
-    if(observed.status===83&&!observed.error&&!observed.signal&&
-       observed.stdout===''&&observed.stderr===''){
-      auditEvent(store,'MAC_OPERATOR_TRANSFER_CANCELLED','block','blocked',
-        'Native picker or native biometric consent explicitly cancelled.');
+    const strictPickerCancel=fixtureImport&&observed.status===83&&
+      !observed.error&&!observed.signal&&observed.stderr===''&&
+      observed.stdout==='BBX_OPERATOR_IMPORT_CANCELLED_PICKER\n';
+    const biometricCancel=observed.status===83&&!observed.error&&
+      !observed.signal&&observed.stderr===''&&observed.stdout==='';
+    if(strictPickerCancel||biometricCancel){
       if(mode==='fixture-oversize')
         throw Error('Oversized file must be explicitly rejected, not cancelled.');
+      if(mode==='fixture-cancel'&&!strictPickerCancel)
+        throw Error('Fixture negative gate requires explicit picker cancellation before Touch ID.');
+      auditEvent(store,'MAC_OPERATOR_TRANSFER_CANCELLED','block','blocked',
+        strictPickerCancel?'Native file picker explicitly cancelled before dispatch.':
+          'Native operator authorization explicitly cancelled.');
       console.log('PASS: Operator cancellation denied the transfer; no receipt accepted.');
       return;
     }
