@@ -139,6 +139,132 @@ static NSData *selectedRegularText(NSURL *url,const char *fixture,
     if(close(fd)!=0){*why="SOURCE_CLOSE";return nil;}
     return data;
 }
+
+#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS
+/* Disposable acceptance-only diagnostics. These entry points cannot be
+   built into the ordinary operator executable and never connect to XPC,
+   request Touch ID, or create a note. Each fixture comes from the local
+   harness, not an MCP/model-supplied path. */
+static bool negativeRegularFixture(const char *path,struct stat *st){
+    if(!path||path[0]!='/'||strnlen(path,PATH_MAX)>=PATH_MAX)return false;
+    return lstat(path,st)==0&&S_ISREG(st->st_mode)&&
+        st->st_uid==geteuid()&&st->st_nlink==1&&
+        st->st_size>0&&st->st_size<=2000;
+}
+static bool negativeLinkFixture(const char *link,const char *target,
+                                struct stat *linkInfo,struct stat *targetInfo){
+    if(!link||link[0]!='/'||strnlen(link,PATH_MAX)>=PATH_MAX||
+       !negativeRegularFixture(target,targetInfo))return false;
+    if(lstat(link,linkInfo)!=0||!S_ISLNK(linkInfo->st_mode)||
+       linkInfo->st_uid!=geteuid())return false;
+    NSString *l=[NSString stringWithUTF8String:link];
+    NSString *t=[NSString stringWithUTF8String:target];
+    if(!l||!t||
+       ![[l stringByDeletingLastPathComponent]
+          isEqualToString:[t stringByDeletingLastPathComponent]]||
+       ![[l lastPathComponent] isEqualToString:@"bbx-test-link.txt"]||
+       ![[t lastPathComponent] isEqualToString:@"bbx-test-target.txt"])
+        return false;
+    char destination[PATH_MAX]={0};
+    ssize_t n=readlink(link,destination,sizeof(destination)-1);
+    return n>0&&n<(ssize_t)sizeof(destination)-1&&
+           strcmp(destination,"bbx-test-target.txt")==0;
+}
+static NSURL *negativeFileURL(const char *path){
+    if(!path||path[0]!='/'||strnlen(path,PATH_MAX)>=PATH_MAX)return nil;
+    NSString *string=[NSString stringWithUTF8String:path];
+    return string?[NSURL fileURLWithPath:string]:nil;
+}
+static NSOpenPanel *negativePanel(const char *expected,NSString *message){
+    NSOpenPanel *panel=[NSOpenPanel openPanel];
+    panel.canChooseFiles=YES;
+    panel.canChooseDirectories=NO;
+    panel.allowsMultipleSelection=NO;
+    panel.resolvesAliases=NO;
+    panel.message=message;
+    NSString *value=[NSString stringWithUTF8String:expected];
+    panel.directoryURL=[NSURL fileURLWithPath:
+        [value stringByDeletingLastPathComponent] isDirectory:YES];
+    return panel;
+}
+static int negativeSymlinkOpen(const char *link,const char *target){
+    struct stat l={0},t={0};
+    if(!negativeLinkFixture(link,target,&l,&t))return 90;
+    errno=0;
+    int fd=open(link,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+    if(fd>=0){close(fd);return 89;}
+    if(errno!=ELOOP)return 89;
+    const char *why=NULL;
+    NSData *snapshot=selectedRegularText(negativeFileURL(link),NULL,&why);
+    if(snapshot||!why||strcmp(why,"SOURCE_OPEN")!=0)return 89;
+    puts("BBX_OPERATOR_SYMLINK_OPEN_DENIED");
+    return 0;
+}
+static int negativeSymlinkPanel(const char *link,const char *target){
+    struct stat l={0},t={0};
+    if(!negativeLinkFixture(link,target,&l,&t))return 90;
+    [NSApplication sharedApplication];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    [NSApp activateIgnoringOtherApps:YES];
+    NSOpenPanel *panel=negativePanel(link,
+        @"TEST: select ONLY bbx-test-link.txt (symbolic link). No Touch ID or import.");
+    if([panel runModal]!=NSModalResponseOK){
+        puts("BBX_OPERATOR_SYMLINK_PICKER_CANCELLED");
+        return 88;
+    }
+    NSURL *url=[panel URLs].firstObject;
+    const char *path=[url fileSystemRepresentation];
+    struct stat selected={0};
+    if(!path||lstat(path,&selected)!=0){
+        puts("BBX_OPERATOR_SYMLINK_PICKER_OTHER_SELECTION");
+        return 88;
+    }
+    if(S_ISLNK(selected.st_mode)&&
+       selected.st_dev==l.st_dev&&selected.st_ino==l.st_ino){
+        const char *why=NULL;
+        NSData *snapshot=selectedRegularText(url,NULL,&why);
+        if(snapshot||!why||strcmp(why,"SOURCE_OPEN")!=0)return 89;
+        puts("BBX_OPERATOR_SYMLINK_PICKER_DENIED");
+        return 0;
+    }
+    if(S_ISREG(selected.st_mode)&&selected.st_dev==t.st_dev&&
+       selected.st_ino==t.st_ino){
+        puts("BBX_OPERATOR_SYMLINK_PICKER_RESOLVED_TARGET");
+        return 88;
+    }
+    puts("BBX_OPERATOR_SYMLINK_PICKER_OTHER_SELECTION");
+    return 88;
+}
+static int negativeWrongSelectionPanel(const char *allowed,const char *wrong){
+    struct stat a={0},w={0};
+    if(!negativeRegularFixture(allowed,&a)||
+       !negativeRegularFixture(wrong,&w)||
+       (a.st_dev==w.st_dev&&a.st_ino==w.st_ino))return 90;
+    [NSApplication sharedApplication];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    [NSApp activateIgnoringOtherApps:YES];
+    NSOpenPanel *panel=negativePanel(allowed,
+        @"TEST: select ONLY bbx-test-other.txt (wrong fixture). No Touch ID or import.");
+    if([panel runModal]!=NSModalResponseOK){
+        puts("BBX_OPERATOR_WRONG_PICKER_CANCELLED");
+        return 88;
+    }
+    NSURL *url=[panel URLs].firstObject;
+    const char *path=[url fileSystemRepresentation];
+    struct stat selected={0};
+    if(!path||lstat(path,&selected)!=0||!S_ISREG(selected.st_mode)||
+       selected.st_dev!=w.st_dev||selected.st_ino!=w.st_ino){
+        puts("BBX_OPERATOR_WRONG_PICKER_OTHER_SELECTION");
+        return 88;
+    }
+    const char *why=NULL;
+    NSData *snapshot=selectedRegularText(url,allowed,&why);
+    if(snapshot||!why||strcmp(why,"FIXTURE_MISMATCH")!=0)return 89;
+    puts("BBX_OPERATOR_WRONG_FIXTURE_DENIED");
+    return 0;
+}
+#endif
+
 static xpc_object_t request(xpc_connection_t peer,const char *method,
                             const char *note,const char *content){
     if(!peer||!method||!safeName(note))return NULL;
@@ -333,6 +459,14 @@ static int exportSelected(xpc_connection_t peer,const char *name){
 int main(int argc,const char *argv[]){
     @autoreleasepool {
         if(argc<2||argc>4)return 90;
+#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS
+        if(argc==4&&strcmp(argv[1],"test-symlink-open")==0)
+            return negativeSymlinkOpen(argv[2],argv[3]);
+        if(argc==4&&strcmp(argv[1],"test-symlink-panel")==0)
+            return negativeSymlinkPanel(argv[2],argv[3]);
+        if(argc==4&&strcmp(argv[1],"test-wrong-panel")==0)
+            return negativeWrongSelectionPanel(argv[2],argv[3]);
+#endif
         const BOOL importing=argc==2&&strcmp(argv[1],"import")==0;
         const BOOL fixtureImport=argc==3&&
                                  strcmp(argv[1],"import-fixture")==0;
