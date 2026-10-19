@@ -11,7 +11,7 @@
  * and audit keys are still same-user local, not independent trust anchors.
  */
 import {spawnSync} from 'node:child_process';
-import {copyFileSync,mkdirSync,mkdtempSync,rmSync} from 'node:fs';
+import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {homedir,tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -28,6 +28,19 @@ const hostId='dev.agentblackbox.xpc-authority.host';
 const workerId='dev.agentblackbox.xpc-authority.worker';
 const note=/^bbx-test-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.txt$/;
 const resultPattern=/^BBX_OPERATOR_(IMPORT|EXPORT)_COMMITTED (bbx-test-[a-f0-9-]+\.txt) ([1-9][0-9]{0,3}) ([a-f0-9]{64})\n$/;
+const allowedDenials=new Set([
+  'XPC_SETUP','FIXTURE_PATH','FIXTURE_MISMATCH','SOURCE_URL',
+  'SOURCE_PATH','SOURCE_OPEN','SOURCE_POLICY','SOURCE_SIZE',
+  'SOURCE_CHANGED','SOURCE_TEXT','SOURCE_CLOSE','SOURCE_UNKNOWN',
+  'NOTE_SCHEMA','NOTE_ENCODING'
+]);
+export function assessOperatorImportDenial(observed){
+  if(!observed||observed.status!==87||observed.error||
+     observed.signal||observed.stderr!==''||
+     typeof observed.stdout!=='string')return null;
+  const match=/^BBX_OPERATOR_IMPORT_DENIED_([A-Z_]+)\n$/.exec(observed.stdout);
+  return match&&allowedDenials.has(match[1])?match[1]:null;
+}
 
 export function assessOperatorTransfer(mode,observed,{requestedName=null}={}){
   if(!['import','export'].includes(mode))
@@ -150,10 +163,11 @@ async function main(){
     throw Error('Explicit MCP_SANDBOX=off required; normal MCP gateway is unchanged.');
   const mode=process.argv[2],name=process.argv[3]??null;
   const buildOnly=mode==='build-check'&&process.argv.length===3;
-  if(!buildOnly&&(!(['import','export'].includes(mode))||
+  const fixtureImport=mode==='fixture-import'&&process.argv.length===3;
+  if(!buildOnly&&!fixtureImport&&(!(['import','export'].includes(mode))||
      (mode==='import'&&process.argv.length!==3)||
      (mode==='export'&&(process.argv.length!==4||!note.test(name)))))
-    throw Error('Use build-check, import, or export followed by the EXACT bbx-test-UUID.txt printed after a successful import.');
+    throw Error('Use build-check, fixture-import, import, or export followed by the EXACT bbx-test-UUID.txt printed after a successful import.');
   const identity=selectLocalDevelopmentIdentity(command('/usr/bin/security',[
     'find-identity','-v','-p','codesigning'
   ],'Apple Development identity lookup').stdout);
@@ -164,6 +178,14 @@ async function main(){
       console.log('PASS: Operator native host compiled; Apple Development host/XPC signatures, Team IDs and App Sandbox entitlements verified. No picker, Touch ID, transfer or HMAC audit was launched.');
       return;
     }
+    // Fixture path is created by THIS local harness, never read from an
+    // agent/MCP argument. The native panel must independently select this
+    // exact inode; the path is only a UI starting point and negative gate.
+    const fixture=fixtureImport?
+      join(temp,'bbx-test-operator-fixture.txt'):null;
+    if(fixture!==null)
+      writeFileSync(fixture,'BBX disposable operator transfer fixture\n',
+        {mode:0o600,flag:'wx'});
     const folder=join(homedir(),'Library','Application Support',
                       'AgentBlackBox','OperatorTransfer');
     mkdirSync(folder,{recursive:true,mode:0o700});
@@ -173,10 +195,13 @@ async function main(){
     auditEvent(store,'MAC_OPERATOR_TRANSFER_OPENED','review','pending',
       'Separate signed native operator transfer initiated; no operation claimed.');
     console.log('PASS: Native operator host and sandboxed XPC worker verified with matching Apple Team ID; worker requires OS-verified incoming host.');
-    console.log(mode==='import'?
+    console.log(fixtureImport?
+      'ACTION: Select ONLY bbx-test-operator-fixture.txt from the opened private test directory; approve Touch ID only for this generated fixture.':
+      mode==='import'?
       'ACTION: Select one small, NON-SENSITIVE text file in the native Open Panel and approve fresh Touch ID.':
       'ACTION: Choose a NEW export destination in the Save Panel and approve fresh Touch ID. Existing files are never overwritten.');
-    const observed=spawnSync(host,mode==='import'?[mode]:[mode,name],{
+    const observed=spawnSync(host,fixtureImport?['import-fixture',fixture]:
+      mode==='import'?[mode]:[mode,name],{
       encoding:'utf8',timeout:130000,maxBuffer:4096,
       env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
     });
@@ -187,14 +212,24 @@ async function main(){
       console.log('PASS: Operator cancellation denied the transfer; no receipt accepted.');
       return;
     }
+    const reason=(mode==='import'||fixtureImport)?
+      assessOperatorImportDenial(observed):null;
+    if(reason!==null){
+      auditEvent(store,'MAC_OPERATOR_TRANSFER_DENIED','block','blocked',
+        'Native pre-dispatch file selection denied at '+reason+
+        '; no XPC file write was attempted.');
+      throw Error('Native import safely rejected before XPC dispatch: '+reason+
+        '. No file path or contents were logged.');
+    }
     if(observed.status===87&&!observed.error&&!observed.signal&&
        observed.stdout===''&&observed.stderr===''){
       auditEvent(store,'MAC_OPERATOR_TRANSFER_DENIED','block','blocked',
-        'Native validation or safe filesystem precondition rejected transfer.');
+        'Native filesystem precondition rejected transfer before committed receipt.');
       throw Error('Native transfer rejected without an accepted receipt.');
     }
     let evidence;
-    try{evidence=assessOperatorTransfer(mode,observed,{requestedName:name});}
+    try{evidence=assessOperatorTransfer(fixtureImport?'import':mode,
+      observed,{requestedName:fixtureImport?null:name});
     catch{
       auditEvent(store,'MAC_OPERATOR_TRANSFER_UNCERTAIN','block','error',
         'No authenticated end-to-end native receipt; possible write must not be automatically retried.');
@@ -202,7 +237,8 @@ async function main(){
     }
     auditEvent(store,'MAC_OPERATOR_TRANSFER_NATIVE_RECEIPT','allow','native-test-committed',
       'Native host reported completed bounded transfer; not a production MCP approval.',evidence);
-    console.log('PASS: Native Touch ID and user-selected '+mode+
+    console.log('PASS: Native Touch ID and user-selected '+
+      (fixtureImport?'import':mode)+
       ' produced an accepted bounded XPC receipt; HMAC metadata audit verified.');
     console.log('NOTE: '+evidence.noteName+
       ' ('+evidence.byteLength+' bytes, SHA256 '+evidence.sha256+').');
