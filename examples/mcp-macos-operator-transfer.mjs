@@ -45,6 +45,23 @@ export function assessOperatorTransfer(mode,observed,{requestedName=null}={}){
   return Object.freeze({noteName:matched[2],byteLength:Number(matched[3]),
     sha256:matched[4]});
 }
+/**
+ * Render compiler failures without printing local home directories, selected
+ * file paths, signing identities, or raw (potentially sensitive) diagnostics.
+ */
+export function summarizeNativeBuildFailure(stderr=''){
+  if(typeof stderr!=='string')return 'No compiler diagnostic available.';
+  const cleaned=stderr.split(/\r?\n/).flatMap(line=>{
+    const source=/(?:^|\/)([A-Za-z][\w.-]*\.(?:m|c|h)):(\d+):(\d+):\s*(fatal\s+)?error:\s*(.*)/.exec(line);
+    if(source)return [source[1]+':'+source[2]+':'+source[3]+
+      ': '+(source[4]??'')+'error: '+source[5].slice(0,220)];
+    const linker=/^(?:ld: |clang: error: )(.*)/.exec(line);
+    if(linker)return ['linker/compiler: '+linker[1].replace(/\/[^\s"'():]+/g,'<path>').slice(0,220)];
+    return [];
+  });
+  return cleaned.length?cleaned.slice(0,4).join(' | '):
+    'No recognized compiler error line (use xcrun clang locally for diagnostics).';
+}
 function command(binary,args,label,{timeout=90000}={}){
   const result=spawnSync(binary,args,{
     encoding:'utf8',timeout,maxBuffer:16384,
@@ -53,7 +70,9 @@ function command(binary,args,label,{timeout=90000}={}){
   if(result.error||result.signal||result.status!==0){
     const extra=binary==='/usr/bin/codesign'&&args.includes('--sign')?
       ' ('+describeCodesignFailure(result)+')':'';
-    throw Error(label+' denied'+extra);
+    const diagnostic=binary==='/usr/bin/xcrun'&&args[0]==='clang'?
+      ' — '+summarizeNativeBuildFailure(result.stderr):'';
+    throw Error(label+' denied'+extra+diagnostic);
   }
   return result;
 }
@@ -84,7 +103,9 @@ function build(temp,identity){
                join(service,'Contents','Info.plist'));
   const flags=['-std=c11','-fblocks','-O2','-Wall','-Wextra',
     '-Werror=implicit-function-declaration'];
-  command('/usr/bin/xcrun',['clang',...flags,'-fobjc-arc','-o',host,
+  // xpc_object_t requires explicit xpc_release() in this C/ObjC host.
+  // ARC and manual XPC lifetime management must not be mixed.
+  command('/usr/bin/xcrun',['clang',...flags,'-o',host,
     join(native,'OperatorTransferHost.m'),'-framework','AppKit',
     '-framework','Foundation','-framework','LocalAuthentication'],
     'Operator transfer native host build');
@@ -128,22 +149,27 @@ async function main(){
   if(process.env.MCP_SANDBOX!=='off')
     throw Error('Explicit MCP_SANDBOX=off required; normal MCP gateway is unchanged.');
   const mode=process.argv[2],name=process.argv[3]??null;
-  if(!(['import','export'].includes(mode))||
+  const buildOnly=mode==='build-check'&&process.argv.length===3;
+  if(!buildOnly&&(!(['import','export'].includes(mode))||
      (mode==='import'&&process.argv.length!==3)||
-     (mode==='export'&&(process.argv.length!==4||!note.test(name))))
-    throw Error('Use import (native source picker) or export <previous bbx-test-UUID.txt>.');
+     (mode==='export'&&(process.argv.length!==4||!note.test(name)))))
+    throw Error('Use build-check, import, or export followed by the EXACT bbx-test-UUID.txt printed after a successful import.');
   const identity=selectLocalDevelopmentIdentity(command('/usr/bin/security',[
     'find-identity','-v','-p','codesigning'
   ],'Apple Development identity lookup').stdout);
-  const folder=join(homedir(),'Library','Application Support',
-                    'AgentBlackBox','OperatorTransfer');
-  mkdirSync(folder,{recursive:true,mode:0o700});
-  const store=new AuditStore(join(folder,'operator-transfers.jsonl'),{
-    externalReceiptFile:null
-  });
   const temp=mkdtempSync(join(tmpdir(),'bbx-native-operator-transfer-'));
   try {
     const host=build(temp,identity);
+    if(buildOnly){
+      console.log('PASS: Operator native host compiled; Apple Development host/XPC signatures, Team IDs and App Sandbox entitlements verified. No picker, Touch ID, transfer or HMAC audit was launched.');
+      return;
+    }
+    const folder=join(homedir(),'Library','Application Support',
+                      'AgentBlackBox','OperatorTransfer');
+    mkdirSync(folder,{recursive:true,mode:0o700});
+    const store=new AuditStore(join(folder,'operator-transfers.jsonl'),{
+      externalReceiptFile:null
+    });
     auditEvent(store,'MAC_OPERATOR_TRANSFER_OPENED','review','pending',
       'Separate signed native operator transfer initiated; no operation claimed.');
     console.log('PASS: Native operator host and sandboxed XPC worker verified with matching Apple Team ID; worker requires OS-verified incoming host.');
