@@ -1,5 +1,9 @@
 # Phase 6 — Native Selected-File Snapshot (experimental)
 
+> **Current result — October 19, 2026:** I preserve this document as the chronological record of my earlier **synthetic-only selected-file, reviewed XPC, and RSA handoff experiments**. Since these entries were written, I separately added and on-device accepted an **operator-only, Apple Development-signed real-byte import/export** prototype with Open/Save Panels, fresh Touch ID, an independent matching SHA-256 round trip, and cancellation, size, overwrite, symlink and wrong-file negative checks. I also completed the fixed 39-byte **integrated RSA Keychain suite** with durable replay/restart and both uncertain-crash cases, plus installed required-mode legacy/modern MCP **synthetic note** acceptance. These remain **distinct** capabilities and do not establish arbitrary MCP document transfer or production authorization. See [my operator-transfer acceptance](v0.8-operator-transfer.md), [integrated RSA suite](v0.8-security-acceptance.md) and [final native acceptance matrix](v0.8-final-native-acceptance.md).
+
+> **Historical scope:** Phrases below such as “real import/export disabled,” “required mode unavailable,” and “PENDING” identify the capabilities and open questions **at the time of those experiments**. I have kept failed trials and older conditions visible rather than retroactively rewriting them as successes. Current scope and unresolved production restrictions are stated in the linked final acceptance record.
+
 ## Scope
 This feature tests a real, user-initiated macOS NSOpenPanel selection and bounded file-descriptor read of ONE generated synthetic fixture. It is not a document import, MCP tool, production signing, or production macOS sandbox permission. Only the byte count and SHA-256 digest are reported; the file path and contents are not returned.
 
