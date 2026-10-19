@@ -36,9 +36,9 @@ const allowedDenials=new Set([
   'NOTE_SCHEMA','NOTE_ENCODING'
 ]);
 const negativeMarkers=Object.freeze({
-  'symlink-open':'BBX_OPERATOR_SYMLINK_OPEN_DENIED\\n',
-  'symlink-picker':'BBX_OPERATOR_SYMLINK_PICKER_DENIED\\n',
-  'wrong-picker':'BBX_OPERATOR_WRONG_FIXTURE_DENIED\\n'
+  'symlink-open':'BBX_OPERATOR_SYMLINK_OPEN_DENIED\n',
+  'symlink-picker':'BBX_OPERATOR_SYMLINK_PICKER_DENIED\n',
+  'wrong-picker':'BBX_OPERATOR_WRONG_FIXTURE_DENIED\n'
 });
 /** Test-only results: cancellation, incorrect selection and target resolution
  * must not be accepted as a successful filesystem-boundary test. */
@@ -46,7 +46,7 @@ export function assessOperatorNegativeFixture(mode,observed){
   if(!Object.hasOwn(negativeMarkers,mode))
     throw Error('Unsupported native negative fixture.');
   if(mode==='symlink-picker'&&observed?.status===88&&
-     observed.stdout==='BBX_OPERATOR_SYMLINK_PICKER_RESOLVED_TARGET\\n'&&
+     observed.stdout==='BBX_OPERATOR_SYMLINK_PICKER_RESOLVED_TARGET\n'&&
      observed.stderr===''&&!observed.signal&&!observed.error)
     throw Error('INCONCLUSIVE: AppKit returned the symlink target inode, not the link. No Touch ID or XPC write was attempted.');
   if(!observed||observed.error||observed.signal||
@@ -222,7 +222,7 @@ async function main(){
       if(mode==='fixture-symlink'){
         const target=join(temp,'bbx-test-target.txt');
         const link=join(temp,'bbx-test-link.txt');
-        const content='BBX disposable symlink target\\n';
+        const content='BBX disposable symlink target\n';
         writeFileSync(target,content,{mode:0o600,flag:'wx'});
         symlinkSync('bbx-test-target.txt',link);
         if(!lstatSync(link).isSymbolicLink()||
@@ -242,9 +242,9 @@ async function main(){
       }else{
         const allowed=join(temp,'bbx-test-allowed.txt');
         const wrong=join(temp,'bbx-test-other.txt');
-        writeFileSync(allowed,'BBX allowed disposable fixture\\n',
+        writeFileSync(allowed,'BBX allowed disposable fixture\n',
           {mode:0o600,flag:'wx'});
-        writeFileSync(wrong,'BBX intentionally wrong disposable fixture\\n',
+        writeFileSync(wrong,'BBX intentionally wrong disposable fixture\n',
           {mode:0o600,flag:'wx'});
         if(!lstatSync(allowed).isFile()||!lstatSync(wrong).isFile()||
            lstatSync(allowed).ino===lstatSync(wrong).ino)
