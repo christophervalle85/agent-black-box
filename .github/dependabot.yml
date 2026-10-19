@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # My runtime has no declared npm dependencies at present. I track
+  # CI actions separately so their pinned commits receive update PRs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
