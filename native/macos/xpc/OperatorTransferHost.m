@@ -31,6 +31,13 @@
 #include <limits.h>
 
 static const char serviceName[]="dev.agentblackbox.xpc-authority.worker";
+/* Fixed, content-free diagnostic identifiers. No user-selected path,
+   filename, errno, payload or Keychain information is ever printed. */
+static int denyImport(const char *reason){
+    printf("BBX_OPERATOR_IMPORT_DENIED_%s\n",reason);
+    fflush(stdout);
+    return 87;
+}
 static bool safeName(const char *text){
     if(!text)return false;
     size_t n=strnlen(text,80);
@@ -76,39 +83,60 @@ static bool deviceOwnerConsent(NSString *operation,const char *name,
     [context invalidate];
     return timeout==0&&approved;
 }
-static NSData *selectedRegularText(NSURL *url){
+static NSData *selectedRegularText(NSURL *url,const char *fixture,
+                                   const char **why){
+    *why="SOURCE_URL";
     if(!url||![url isFileURL])return nil;
     const char *path=[url fileSystemRepresentation];
+    *why="SOURCE_PATH";
     if(!path||path[0]!='/'||strnlen(path,PATH_MAX)>=PATH_MAX)return nil;
+    *why="SOURCE_OPEN";
     const int fd=open(path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
     if(fd<0)return nil;
     struct stat before={0},after={0};
     NSData *data=nil;
+    *why="SOURCE_POLICY";
     if(fstat(fd,&before)==0 && S_ISREG(before.st_mode) &&
-       before.st_uid==geteuid() && before.st_nlink==1 &&
-       before.st_size>0 && before.st_size<=2000){
-        unsigned char bytes[2001]={0};
-        size_t used=0;
-        while(used<(size_t)before.st_size){
-            ssize_t n=read(fd,bytes+used,(size_t)before.st_size-used);
-            if(n<=0)break;
-            used+=(size_t)n;
+       before.st_uid==geteuid() && before.st_nlink==1){
+        if(fixture){
+            struct stat expected={0};
+            *why="FIXTURE_MISMATCH";
+            if(lstat(fixture,&expected)!=0||!S_ISREG(expected.st_mode)||
+               expected.st_uid!=geteuid()||expected.st_nlink!=1||
+               expected.st_dev!=before.st_dev||
+               expected.st_ino!=before.st_ino){
+                close(fd);
+                return nil;
+            }
         }
-        unsigned char extra=0;
-        if(used==(size_t)before.st_size&&read(fd,&extra,1)==0&&
-           fstat(fd,&after)==0&&before.st_dev==after.st_dev&&
-           before.st_ino==after.st_ino&&
-           before.st_size==after.st_size&&
-           before.st_mtimespec.tv_sec==after.st_mtimespec.tv_sec&&
-           before.st_mtimespec.tv_nsec==after.st_mtimespec.tv_nsec&&
-           memchr(bytes,0,used)==NULL){
-            NSData *candidate=[NSData dataWithBytes:bytes length:used];
-            if([[NSString alloc] initWithData:candidate
-                         encoding:NSUTF8StringEncoding])data=candidate;
+        *why="SOURCE_SIZE";
+        if(before.st_size>0&&before.st_size<=2000){
+            unsigned char bytes[2001]={0};
+            size_t used=0;
+            while(used<(size_t)before.st_size){
+                ssize_t n=read(fd,bytes+used,(size_t)before.st_size-used);
+                if(n<=0)break;
+                used+=(size_t)n;
+            }
+            unsigned char extra=0;
+            *why="SOURCE_CHANGED";
+            if(used==(size_t)before.st_size&&read(fd,&extra,1)==0&&
+               fstat(fd,&after)==0&&before.st_dev==after.st_dev&&
+               before.st_ino==after.st_ino&&
+               before.st_size==after.st_size&&
+               before.st_mtimespec.tv_sec==after.st_mtimespec.tv_sec&&
+               before.st_mtimespec.tv_nsec==after.st_mtimespec.tv_nsec){
+                *why="SOURCE_TEXT";
+                if(memchr(bytes,0,used)==NULL){
+                    NSData *candidate=[NSData dataWithBytes:bytes length:used];
+                    if([[NSString alloc] initWithData:candidate
+                                     encoding:NSUTF8StringEncoding])data=candidate;
+                }
+            }
+            memset(bytes,0,sizeof(bytes));
         }
-        memset(bytes,0,sizeof(bytes));
     }
-    if(close(fd)!=0)return nil;
+    if(close(fd)!=0){*why="SOURCE_CLOSE";return nil;}
     return data;
 }
 static xpc_object_t request(xpc_connection_t peer,const char *method,
@@ -148,25 +176,35 @@ static NSData *readNote(xpc_connection_t peer,const char *name){
     if(r)xpc_release(r);
     return result;
 }
-static int importSelected(xpc_connection_t peer){
+static int importSelected(xpc_connection_t peer,const char *fixture){
     NSOpenPanel *panel=[NSOpenPanel openPanel];
     panel.canChooseFiles=YES;
     panel.canChooseDirectories=NO;
     panel.allowsMultipleSelection=NO;
     panel.resolvesAliases=NO;
-    panel.message=@"Select ONE small, non-sensitive UTF-8 text file (1–2000 bytes).";
+    panel.message=fixture?
+        @"TEST: Select ONLY bbx-test-operator-fixture.txt (a generated disposable file).":
+        @"Select ONE small, non-sensitive UTF-8 text file (1–2000 bytes).";
+    if(fixture){
+        NSString *expected=[NSString stringWithUTF8String:fixture];
+        if(!expected)return denyImport("FIXTURE_PATH");
+        panel.directoryURL=[NSURL fileURLWithPath:
+            [expected stringByDeletingLastPathComponent] isDirectory:YES];
+    }
     if([panel runModal]!=NSModalResponseOK)return 83;
-    NSData *snapshot=selectedRegularText([panel URLs].firstObject);
-    if(!snapshot)return 87;
+    const char *snapshotReason=NULL;
+    NSData *snapshot=selectedRegularText([panel URLs].firstObject,
+                                         fixture,&snapshotReason);
+    if(!snapshot)return denyImport(snapshotReason?snapshotReason:"SOURCE_UNKNOWN");
     NSString *uuid=[[[NSUUID UUID] UUIDString] lowercaseString];
     NSString *name=[NSString stringWithFormat:@"bbx-test-%@.txt",uuid];
     const char *note=[name UTF8String];
     char digest[65]={0};
     sha256Hex(snapshot,digest);
-    if(!safeName(note))return 87;
+    if(!safeName(note))return denyImport("NOTE_SCHEMA");
     NSString *text=[[NSString alloc] initWithData:snapshot
                                         encoding:NSUTF8StringEncoding];
-    if(!text||[text length]==0)return 87;
+    if(!text||[text length]==0)return denyImport("NOTE_ENCODING");
     if(!deviceOwnerConsent(@"IMPORT",note,[snapshot length],digest))return 83;
     /* No host filesystem paths cross the XPC boundary. */
     xpc_object_t response=request(peer,"write_note",note,[text UTF8String]);
@@ -266,20 +304,28 @@ int main(int argc,const char *argv[]){
     @autoreleasepool {
         if(argc<2||argc>3)return 90;
         const BOOL importing=argc==2&&strcmp(argv[1],"import")==0;
+        const BOOL fixtureImport=argc==3&&
+                                 strcmp(argv[1],"import-fixture")==0;
         const BOOL exporting=argc==3&&strcmp(argv[1],"export")==0&&
                              safeName(argv[2]);
-        if(!importing&&!exporting)return 90;
+        if(!importing&&!fixtureImport&&!exporting)return 90;
+        if(fixtureImport&&(!argv[2]||argv[2][0]!='/'||
+                          strnlen(argv[2],PATH_MAX)>=PATH_MAX))
+            return denyImport("FIXTURE_PATH");
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [NSApp activateIgnoringOtherApps:YES];
         xpc_connection_t peer=xpc_connection_create(serviceName,
                    dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0));
-        if(!peer)return 87;
+        if(!peer)return importing||fixtureImport?
+            denyImport("XPC_SETUP"):87;
         xpc_connection_set_event_handler(peer,^(xpc_object_t event){
             (void)event; // request() validates each reply explicitly.
         });
         xpc_connection_resume(peer);
-        int result=importing?importSelected(peer):exportSelected(peer,argv[2]);
+        int result=(importing||fixtureImport)?
+            importSelected(peer,fixtureImport?argv[2]:NULL):
+            exportSelected(peer,argv[2]);
         xpc_connection_cancel(peer);
         xpc_release(peer);
         return result;
