@@ -1,5 +1,7 @@
 # v0.6: OS sandboxing and audit integrity
 
+> **Version context (updated October 19, 2026):** I preserve this guide's v0.6 Linux Bubblewrap design and original macOS limitation as historical background. On my **v0.8 feature branch**, I have since accepted a separately installed **Apple Development-signed macOS App Sandbox XPC worker** for bounded synthetic MCP notes in `MCP_SANDBOX=required`. The ordinary Node controller is still unsandboxed; the XPC worker is not a general file-transfer service or a production notarized release. See [my accepted native tests and current limitations](v0.8-final-native-acceptance.md).
+
 ## Official sources
 
 - [Bubblewrap upstream manual](https://github.com/containers/bubblewrap/blob/main/bwrap.xml) — namespace options, `--ro-bind`, `--bind`, `--unshare-net`, `--new-session`, `--die-with-parent`.
@@ -11,7 +13,7 @@
 
 `MCP_SANDBOX=off` (default): The downstream is **not OS-sandboxed**. The existing path validation, tool allowlist and human approval still apply. This is the compatible local demo mode on macOS.
 
-`MCP_SANDBOX=required`: **Linux only**, requires Bubblewrap at `/usr/bin/bwrap`, or `MCP_BWRAP_PATH=/absolute/path/to/bwrap`. Fails on macOS, missing Bubblewrap, or denied kernel namespace isolation. There is **no fallback to unsandboxed spawn**. Install with the system package manager and validate the Linux kernel/user namespaces allow operation.
+`MCP_SANDBOX=required`: **Linux v0.6 path:** requires Bubblewrap at `/usr/bin/bwrap`, or `MCP_BWRAP_PATH=/absolute/path/to/bwrap`, and refuses missing/denied kernel namespace isolation. **macOS v0.8 feature-branch path:** requires my explicitly installed, locally signed and verified native host plus separately sandboxed XPC worker, its Team ID trust pin and exact workspace binding. It fails closed without that installation; it never substitutes an ordinary unsandboxed Node notes subprocess. I do **not** claim OS sandboxing for the parent controller. See [native acceptance](v0.8-final-native-acceptance.md).
 
 The Bubblewrap process uses separate user/PID/IPC/UTS/network namespaces, a new session, die-with-parent, a private `/tmp`, minimal `/proc` and `/dev`; exposes the runtime and the specific bundled program and necessary system libraries read-only, and mounts only `demo-workspace` with write permission. No inherited `NODE_OPTIONS`, HOME, service token or audit secrets are passed to the child. It cannot access the host project's `data/` by these mounts. This is a **mount namespace isolation prototype**, not seccomp, a container security suite, or a defense against kernel bugs.
 
@@ -27,7 +29,7 @@ Both commands must pass on a **Linux host configured to permit user and network 
 
 ### macOS users
 
-Apple documents an official App Sandbox for signed applications and helpers using `com.apple.security.app-sandbox` entitlements. A shell-launched Node subprocess does not acquire those entitlements from this project. v0.6 therefore **does not claim a macOS OS sandbox**, and `MCP_SANDBOX=required` refuses to run on macOS. A future signed Xcode/XPC helper should be treated as a separate, carefully tested platform integration. Avoid relying on undocumented `sandbox-exec` profile syntax as a supported production boundary.
+Apple documents an official App Sandbox for signed applications and helpers using `com.apple.security.app-sandbox` entitlements. A shell-launched Node subprocess does **not** acquire those entitlements automatically. In v0.6, I therefore refused macOS `required` mode. On the v0.8 feature branch I now allow it **only** after verification of an explicitly installed, Apple Development-signed native host, sandboxed XPC worker, trust pin, expected OS peer requirements and canonical private Documents workspace. My real-Mac tests confirmed host-file and loopback denial in a disposable diagnostic worker-source build, and passed actual legacy/modern required-mode MCP requests on the installed worker. This is **not** a Developer ID/notarized production boundary, and the Node controller remains outside App Sandbox. I do not use undocumented `sandbox-exec` profiles as a substitute.
 
 ## Integrity files and enrollment
 

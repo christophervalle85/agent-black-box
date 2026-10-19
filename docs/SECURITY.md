@@ -1,6 +1,6 @@
 # Security model and limitations
 
-This is an **educational local-only MVP**, not a hardened security product.
+**Current scope (v0.8):** I maintain Agent Black Box as a local educational security-engineering prototype, **not** a hardened, independently audited product. My original Node policy and MCP demo remain routing-dependent; the separately installed macOS App Sandbox XPC worker is a narrower OS enforcement boundary for fixed synthetic note operations only. See [the native acceptance record](v0.8-final-native-acceptance.md).
 
 ## Enforcement boundary
 
@@ -48,11 +48,21 @@ Prompts and file contents might contain prompt injection; the system prompt tell
 The UI is designed for a single trusted local operator. It is not authenticated, so never publish the port, embed the dashboard in other sites, or expose it via a reverse proxy. The Ollama endpoint should likewise remain local. Browser requests to start the agent require a matching `Origin` and JSON content type; network threats and local malware are not fully addressed by these checks.
 
 
+## v0.8 macOS required-mode and operator-only acceptance
+
+On October 19, 2026, I completed **real-Mac native acceptance** of my explicitly installed, Apple Development-signed required-mode host/XPC worker. I verified the canonical worker-owned workspace, independently pinned local Team identity and both peer-requirement directions; a disposable signed diagnostic build of the required-worker source was denied access to a host-private file and a reachable loopback listener but could write/fsync in its sandbox Documents root. I then exercised both legacy and modern **real MCP gateway** paths with policy traversal denial, human approval/denial, native XPC read/write, no-clobber and fresh HMAC audit checks.
+
+I separately tested native operator-only file selection, fresh Touch ID, bounded bytes and independent SHA-256 readback/export, with explicit cancellation, oversize, existing-destination, symlink-source and wrong-file denials. **Neither legacy nor modern MCP exposes that real-file operation.** The standalone synthetic Keychain RSA integrated suite also passed durable nonce replay/restart and pre-/post-reservation uncertain-crash tests. I did not interpret crash markers as real-document commits.
+
+**My remaining threat limits:** the Node process/controller is outside the worker's OS sandbox; same-user access to HMAC/audit and Keychain/trust records can undermine provenance; native signing uses local Apple Development identity, not Developer ID/notarized distribution. The installed XPC worker accepts only a bounded synthetic test-note grammar, not arbitrary tools or paths. I have not established atomic real-document recovery, exhaustive malicious filesystem races, or independent human/controller authorization against same-user compromise. The diagnostic source build is not a byte-identical installed binary; the installed signatures and entitlements are verified separately.
+
+This v0.8 mode **fails closed** when the signed installation, pin, entitlements, expected workspace, native handshake or peer verification is invalid. `MCP_SANDBOX=off` is still an unsandboxed demo setting, not a security claim. The following v0.5 and v0.6 sections document historical design boundaries and should not be read as a claim that the current v0.8 required-mode XPC worker is absent.
+
 ## v0.5 MCP compatibility/hardening limits
 
-The gateway now serves the documented 2026-07-28 modern MCP tool subset as well as the 2025-11-25 legacy subset; unknown protocol revisions and missing modern metadata are rejected. Downstream initialization now follows the legacy notification order. A cancelled forwarded request terminates the downstream process, but an earlier side effect remains possible and must be considered **outcome uncertain**. Do not interpret cancellation as atomic rollback. The downstream is still an unsandboxed executable with the invoking user's OS privileges, and the audit file is not tamper-evident. This remains a local educational prototype, not a multi-user production security gateway.
+The gateway now serves the documented 2026-07-28 modern MCP tool subset as well as the 2025-11-25 legacy subset; unknown protocol revisions and missing modern metadata are rejected. Downstream initialization now follows the legacy notification order. A cancelled forwarded request terminates the downstream process, but an earlier side effect remains possible and must be considered **outcome uncertain**. Do not interpret cancellation as atomic rollback. **In that v0.5 release**, the downstream was an unsandboxed executable with the invoking user's OS privileges and the audit file lacked keyed integrity. I later added v0.6 HMAC journaling and, on the v0.8 feature branch, a separately signed/sandboxed macOS required-mode XPC worker for synthetic notes. These improvements do not establish multi-user or independently trusted production security.
 
 
 ## v0.6 OS sandbox and audit integrity
 
-See [SANDBOX_AUDIT.md](SANDBOX_AUDIT.md). Linux `MCP_SANDBOX=required` uses Bubblewrap and refuses to run without a functioning sandbox. On macOS the standard Node CLI is explicitly **not OS-sandboxed**; Apple requires signed and entitled App Sandbox helpers for supported isolation. New audit entries are checked with keyed HMAC-SHA256 and a local checkpoint. These local artifacts are tamper-evident against accidental/unauthorized edits *without the key* but are not independently immutable or safe from a same-user attacker. Legacy history requires explicit trust-on-first-use sealing before v0.6 begins.
+See [SANDBOX_AUDIT.md](SANDBOX_AUDIT.md). Linux `MCP_SANDBOX=required` uses Bubblewrap and refuses to run without a functioning sandbox. On macOS the standard **Node controller** remains **not OS-sandboxed**; my v0.8 feature branch instead requires an explicitly installed and verified signed/entitled App Sandbox XPC worker for the narrow `required` synthetic note operations. New audit entries are checked with keyed HMAC-SHA256 and a local checkpoint. These local artifacts are tamper-evident against accidental/unauthorized edits *without the key* but are not independently immutable or safe from a same-user attacker. Legacy history requires explicit trust-on-first-use sealing before v0.6 begins.

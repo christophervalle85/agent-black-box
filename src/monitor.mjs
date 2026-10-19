@@ -74,11 +74,17 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
     }
     event.id = randomUUID();
     event.timestamp = new Date().toISOString();
-    event.decision = response?.approved === true && !signal?.aborted ? 'allow' : 'block';
-    event.ruleId = response?.approved === true ? 'APPROVAL_GRANTED' : 'APPROVAL_DENIED';
-    event.reason = response?.approved === true ? 'The local operator approved this exact note creation.' : 'Human approval was not granted.';
-    event.outcome = response?.approved === true ? 'success' : 'blocked';
-    event.summary = response?.approved === true ? 'Human approval granted; executing controlled adapter.' : 'Note creation prevented: approval denied, unavailable, or expired.';
+    // A cancellation wins even if an approval reply races with the abort.
+    // Never leave a blocked write labelled APPROVAL_GRANTED or successful.
+    const cancelledDuringApproval = signal?.aborted === true;
+    const approved = response?.approved === true && !cancelledDuringApproval;
+    event.decision = approved ? 'allow' : 'block';
+    event.ruleId = cancelledDuringApproval ? 'MCP_CANCELLED' : approved ? 'APPROVAL_GRANTED' : 'APPROVAL_DENIED';
+    event.reason = cancelledDuringApproval ? 'Client cancelled while awaiting human approval.' :
+      approved ? 'The local operator approved this exact note creation.' : 'Human approval was not granted.';
+    event.outcome = approved ? 'success' : 'blocked';
+    event.summary = cancelledDuringApproval ? 'Cancellation prevented downstream execution.' :
+      approved ? 'Human approval granted; executing controlled adapter.' : 'Note creation prevented: approval denied, unavailable, or expired.';
     if (event.decision === 'block') {
       event.durationMs = Math.round((performance.now() - start) * 10) / 10;
       store.add({ ...event });
@@ -100,6 +106,13 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
 
   try {
     const result = await execute(reviewedArgs ?? args);
+    // Completion and cancellation can race. Once dispatch began, a write
+    // may already have committed even if the client no longer wants its
+    // result. Record uncertainty instead of an incorrect successful reply.
+    if (signal?.aborted) throw Object.assign(
+      new Error('MCP request cancelled after execution started.'),
+      { outcomeUnknown: true }
+    );
     event.outcome = result?.simulated ? 'simulated' : 'success';
     event.summary = redact(result?.summary ?? 'Tool completed (output not recorded).');
     event.durationMs = Math.round((performance.now() - start) * 10) / 10;
@@ -107,10 +120,14 @@ export async function guardedToolCall({ agentId, runId, tool, args, execute, sto
     return { event, result: result?.value };
   } catch (error) {
     event.outcome = 'error';
-    if (signal?.aborted) {
+    if (signal?.aborted || error?.outcomeUnknown === true) {
       event.ruleId = 'MCP_OUTCOME_UNKNOWN';
-      event.reason = 'The client cancelled after execution began. Side effects may have already occurred.';
-      event.summary = 'Downstream was cancelled; execution outcome is uncertain, not safely rolled back.';
+      event.reason = signal?.aborted
+        ? 'The client cancelled after execution began. Side effects may have already occurred.'
+        : 'Native or downstream acknowledgement was lost after dispatch; side effects may already have occurred.';
+      event.summary = signal?.aborted
+        ? 'Downstream was cancelled; execution outcome is uncertain, not safely rolled back.'
+        : 'Downstream failed or timed out; write outcome unknown, not safely rolled back.';
     } else {
       event.summary = 'Execution failed; raw error details withheld from audit storage.';
     }

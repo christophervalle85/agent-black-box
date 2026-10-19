@@ -247,3 +247,20 @@ test('modern stdio: direct tools/list without discover is accepted, as MCP v2 pe
   assert.equal(read.result.isError,undefined);
   assert.match(read.result.content[0].text,/MCP integration test/);
 }));
+
+test('modern stdio cancellation during cold downstream discovery prevents tool dispatch',()=>fixture(async({client,controller,workspaceRoot})=>{
+  const call=client.request('tools/call',modern({
+    name:'write_note',arguments:{path:'cancel-before-dispatch.txt',content:'SYNTHETIC_CANCEL_CONTENT'}
+  }));
+  call.p.catch(()=>{}); // MCP recommends no response for a cancelled request.
+  client.raw({jsonrpc:'2.0',method:'notifications/cancelled',
+    params:{requestId:call.id,reason:'Cancel before native dispatch'}});
+  await sleep(350);
+  assert.equal(controller.approvalQueue.list().length,0);
+  assert.equal(controller.store.stats().total,0);
+  assert.equal(existsSync(join(workspaceRoot,'cancel-before-dispatch.txt')),false);
+  const read=await client.request('tools/call',modern({
+    name:'read_note',arguments:{path:'notes.txt'}
+  })).p;
+  assert.match(read.result?.content?.[0]?.text??'',/MCP integration test/);
+}));

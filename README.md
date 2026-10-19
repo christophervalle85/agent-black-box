@@ -1,8 +1,8 @@
-# Agent Black Box · v0.7
+# Agent Black Box · v0.8 development
 
 **Local AI agent security observability:** Agent Black Box checks instrumented AI-tool operations against deterministic security policies before execution, records policy decisions in a local audit log, and displays activity in a live dashboard. Earlier releases introduced human approval, a guarded MCP stdio gateway, dual-era MCP support, Linux Bubblewrap isolation, and HMAC-protected audit logging. **v0.7 adds signed independent checkpoint receipts, crash-recovery journaling, and incident-status monitoring.**
 
-![Status](https://img.shields.io/badge/MVP-v0.7-blue) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
+![Status](https://img.shields.io/badge/branch-v0.8--dev-yellow) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
 ## Quick start
 
@@ -38,6 +38,35 @@ OLLAMA_MODEL=qwen3:8b npm start # pull that model first
 
 No cloud API key or npm dependency installation is required. The model download is a few gigabytes and needs sufficient memory. Data persists to the gitignored `data/audit.jsonl` file; Ctrl+C stops the server.
 
+## v0.8: Native macOS security prototype — accepted on my development Mac
+
+**October 19, 2026 status:** I completed on-device acceptance of my **locally installed Apple Development-signed** macOS MCP worker and my separately gated native operator-transfer experiment. This is a **prototype milestone**, not Developer ID/notarized public distribution, a general OS sandbox for Node, or a production security certification. Stable `main` remains v0.7; I am documenting this work on `feature/v0.8-native-transfers`.
+
+### What I built and verified
+
+| Boundary | My implementation and observed evidence |
+| --- | --- |
+| **Agent-to-tool control** | I expose only fixed `read_note` / `write_note` MCP operations; deterministic policy blocks traversal before execution, and writes require explicit operator approval. |
+| **OS process isolation** | I route macOS `MCP_SANDBOX=required` synthetic notes through a signed native host into an independently entitled App Sandbox XPC worker. A disposable diagnostic build of the actual worker source **could not read a host-private file or reach a live loopback socket**, but could fsync a file in its own container. |
+| **Signed peer and workspace trust** | I verified host/worker code signatures, pinned Apple Team ID, incoming/outgoing XPC peer requirements, and a fixed native Documents workspace. Missing trust prerequisites **fail closed** rather than launching an unsandboxed notes fallback. |
+| **Legacy and modern MCP** | I ran the **real** installed required-mode MCP gateway for both protocols: allowlisted discovery, metadata/version validation, denial, approval, native write/read, exclusive-create denial and HMAC audit integrity all passed. |
+| **Operator-only real bytes** | Separately, my native Open/Save Panels and fresh Touch ID consent transferred a bounded 41-byte UTF-8 fixture with matching independently checked SHA-256. The additional native cancellation, oversize, overwrite, **symlink-source**, and **wrong-file** rejection checks passed. **Agents cannot invoke this real-file path.** |
+| **Crash/replay honesty** | My separately tested fixed-synthetic-byte Keychain RSA suite denied forged reviews and durable nonce replay after worker restart. It preserved crash-before and crash-after outcomes as **UNCERTAIN**, not invented success or rollback. |
+
+I verified the installed native required-mode app on my Mac with:
+
+```bash
+npm run mcp:mac-native-required -- verify
+MCP_SANDBOX=required npm run mcp:mac-xpc-mcp-acceptance -- --required-installed
+MCP_SANDBOX=required npm run mcp:mac-xpc-mcp-acceptance -- --required-installed --modern
+```
+
+These commands presume a **previously installed, explicitly signed local app** and are not an installation or replacement procedure. I installed it once with `MCP_SANDBOX=off npm run mcp:mac-native-required -- install`; I do not automatically run `install-replace` or touch my existing Keychain RSA identity. The actual installed workspace is reported by `verify` and must be used as the exact `MCP_WORKSPACE_ROOT` for standalone gateway/controller configuration—never guessed.
+
+**My trust boundary:** The ordinary Node gateway/controller and its audit HMAC key are not sandboxed or protected from a sufficiently capable same-user adversary. The XPC worker is restricted to synthetic `bbx-test-*.txt` notes; my operator-selected file transfer is a **separate experiment**, not an MCP capability. Local development signing, a same-user trust pin, and verified Mac runtime tests are not equivalent to independent audit custody, race-complete real-document recovery, or notarized release.
+
+**Acceptance evidence:** [final native matrix](docs/v0.8-final-native-acceptance.md), [operator-transfer procedure](docs/v0.8-operator-transfer.md), [integrated Keychain RSA suite](docs/v0.8-security-acceptance.md), and [chronological macOS sandbox research](docs/MACOS_SANDBOX_V08.md). My latest shared **post-diagnostic** local `npm test` output reported **251 passed, 0 failed**; both interactive native negative fixtures separately passed on my Mac. The test transcript did not include an exact Git commit ID, so I do not claim the suite ran against the subsequent documentation-only history rewrite.
+
 ## v0.7: Independently verifiable evidence and crash recovery
 
 See the [v0.7 audit trust and recovery operations guide](docs/AUDIT_TRUST.md) for the official NIST/OWASP/Node.js references, trust model and recovery limits.
@@ -71,7 +100,7 @@ Audit writes now use an authenticated pending journal. A restart can repair only
 
 See the [OS sandboxing and audit integrity operator guide](docs/SANDBOX_AUDIT.md), grounded in the official Bubblewrap manual, Apple App Sandbox, NIST HMAC specification and OWASP logging guidance.
 
-**macOS (including Apple Silicon):** An ordinary Node subprocess is **not** covered by Apple's signed App Sandbox. `MCP_SANDBOX=required` therefore refuses to run; the default local demo remains `off`. Linux users can opt into strict namespace sandboxing with Bubblewrap; failure never silently downgrades. GitHub-hosted Linux currently restricts network-namespace setup; CI therefore verifies controlled fail-closed behavior there, and sandboxed execution still requires validation on a compatible Linux host.
+**Historical v0.6 boundary:** An ordinary Node subprocess is **not** covered by Apple's signed App Sandbox. In v0.6 I rejected macOS `MCP_SANDBOX=required` rather than silently executing unsandboxed. **On this v0.8 feature branch**, I now support that mode **only** for a verified, locally installed, signed native XPC worker handling synthetic notes; missing installation or identity fails closed. Linux still uses Bubblewrap namespace isolation where supported. GitHub-hosted Linux can restrict namespace setup, so CI fail-closed checks alone do not establish a successful isolated Linux runtime.
 
 ```bash
 # Upgrade from v0.5 if data/audit.jsonl is nonempty (one-time, preserves old bytes):
