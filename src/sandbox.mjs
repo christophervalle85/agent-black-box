@@ -6,6 +6,7 @@
 import { realpathSync, lstatSync, existsSync, readlinkSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { planMacRequiredMcp } from './macos-required-mcp.mjs';
 
 const ROOT_SYSTEM = Object.freeze(['/usr', '/lib', '/lib64', '/bin', '/sbin']);
 const OPTIONAL_FILES = Object.freeze(['/etc/ld.so.cache']);
@@ -58,6 +59,7 @@ export function planMcpSandbox({mode='off',platform=process.platform,nodePath=pr
 export function downstreamLaunch({env=process.env,workspaceRoot,scriptPath,platform=process.platform,nodePath=process.execPath}={}) {
   const mode = env.MCP_SANDBOX ?? 'off';
   if (mode==='required') {
+    if(platform==='darwin')return planMacRequiredMcp({env,workspaceRoot,platform,nodePath});
     if(platform!=='linux')return planMcpSandbox({mode,platform,workspaceRoot,scriptPath,nodePath});
     const tool = env.MCP_BWRAP_PATH || '/usr/bin/bwrap';
     // Verify availability in advance; failure is fatal, not a downgrade.
