@@ -106,7 +106,8 @@ export function probeMacRequiredWorkspace(host){
 }
 export function planMacRequiredMcp({env=process.env,workspaceRoot,
   platform=process.platform,nodePath=process.execPath,
-  verify=verifyMacRequiredInstallation,probe=probeMacRequiredWorkspace}={}){
+  verify=verifyMacRequiredInstallation,probe=probeMacRequiredWorkspace,
+  bind=validateMacWorkspaceBinding}={}){
   if(platform!=='darwin')
     throw Error('Native required MCP is only for macOS.');
   if(!workspaceRoot||typeof env.MCP_WORKSPACE_ROOT!=='string')
@@ -115,8 +116,7 @@ export function planMacRequiredMcp({env=process.env,workspaceRoot,
     throw Error('MCP_WORKSPACE_ROOT differs from canonical workspace.');
   const {host}=verify({platform});
   const reportedRoot=probe(host);
-  validateMacWorkspaceBinding({configuredRoot:workspaceRoot,
-    reportedRoot,platform});
+  bind({configuredRoot:workspaceRoot,reportedRoot,platform});
   if(!nodePath.startsWith('/'))
     throw Error('Required-mode Node executable must be absolute.');
   return Object.freeze({
