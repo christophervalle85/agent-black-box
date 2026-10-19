@@ -12,6 +12,8 @@ import {homedir,tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {assessXpc} from './mcp-macos-xpc-probe.mjs';
+import {selectLocalDevelopmentIdentity,parseSignedIdentity}
+  from './mcp-macos-xpc-signed-peers.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const sources=join(root,'native','macos','xpc');
@@ -80,9 +82,13 @@ async function main(){
   if(process.platform!=='darwin')throw Error('Real macOS required for XPC OS-denial acceptance.');
   if(process.env.MCP_SANDBOX!=='off')
     throw Error('Synthetic notes-worker probe requires explicit MCP_SANDBOX=off.');
-  if(process.argv.slice(2).length)
-    throw Error('This fixed worker isolation probe accepts no arguments.');
+  const requiredSigned=process.argv.length===3&&process.argv[2]==='--required-signed';
+  if(process.argv.length>2&&!requiredSigned)
+    throw Error('Only --required-signed is supported for distinct native required-worker isolation probe.');
   check('/usr/bin/xcrun',['--find','clang'],'Native compiler');
+  const signingIdentity=requiredSigned?selectLocalDevelopmentIdentity(
+    check('/usr/bin/security',['find-identity','-v','-p','codesigning'],
+      'Existing Apple Development signer').stdout):'-';
   const directory=mkdtempSync(join(tmpdir(),'bb-notes-isolation-'));
   const homeMarkerRoot=mkdtempSync(join(homedir(),'.bb-notes-isolation-host-'));
   let listener;
@@ -99,18 +105,29 @@ async function main(){
       '-DBBX_TEST_NOTES_ISOLATION=1','-o',host,
       join(sources,'ProbeHost.c')],'Notes worker probe host build');
     check('/usr/bin/xcrun',['clang','-std=c11','-fblocks','-O2','-Wall','-Wextra',
-      '-DBBX_TEST_NOTES_ISOLATION=1','-o',worker,
+      '-DBBX_TEST_NOTES_ISOLATION=1',
+      ...(requiredSigned?['-DBBX_NATIVE_REQUIRED_MCP=1']:[]),
+      '-o',worker,
       join(sources,'AuthorityNotesService.m'),'-framework','Foundation'],
       'Actual notes-worker source with isolated diagnostic hook');
-    check('/usr/bin/codesign',['--force','--sign','-','--options','runtime',
+    check('/usr/bin/codesign',['--force','--sign',signingIdentity,'--options','runtime',
       '--identifier','dev.agentblackbox.xpc-authority.worker',
       '--entitlements',join(root,'native','macos','SandboxProbe.entitlements'),
       service],'Ad-hoc App Sandbox notes-worker signing');
-    check('/usr/bin/codesign',['--force','--sign','-','--options','runtime',
+    check('/usr/bin/codesign',['--force','--sign',signingIdentity,'--options','runtime',
       '--identifier','dev.agentblackbox.xpc-authority.host',app],
       'Ad-hoc native host signing');
     check('/usr/bin/codesign',['--verify','--strict','--deep',app],
       'Nested app seal');
+    if(requiredSigned){
+      const team=target=>check('/usr/bin/codesign',['--display','--verbose=4',target],
+        'Required worker identity').stderr;
+      const first=parseSignedIdentity(team(app),
+        'dev.agentblackbox.xpc-authority.host');
+      const second=parseSignedIdentity(team(service),
+        'dev.agentblackbox.xpc-authority.worker');
+      if(first!==second)throw Error('Required signed host and worker Team IDs differ.');
+    }
     const entitlements=check('/usr/bin/codesign',
       ['--display','--entitlements','-','--xml',service],
       'Notes-worker entitlements');
@@ -143,8 +160,11 @@ async function main(){
       }));
       throw Error('Notes-worker isolation not accepted; do not enable required mode.');
     }
-    console.log('PASS: Notes-worker code OS isolation accepted in test-only XPC build.');
-    console.log('NOTE: Diagnostic compile-time hook is absent from ordinary worker; production release signature and trust still pending.');
+    console.log('PASS: '+(requiredSigned?
+      'Apple Development-signed required-worker source installed an incoming OS peer gate and passed':
+      'Notes-worker code passed')+
+      ' real macOS file/network isolation in the separate diagnostic XPC build.');
+    console.log('NOTE: Diagnostic method is compiled only for this disposable signed test, never into the installed required-mode worker.');
   }finally{
     if(listener)await new Promise(ok=>listener.server.close(ok));
     rmSync(directory,{recursive:true,force:true});
