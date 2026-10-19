@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {assessOperatorTransfer,assessOperatorImportDenial,
-  summarizeNativeBuildFailure}
+  assessOperatorNegativeFixture,summarizeNativeBuildFailure}
   from '../examples/mcp-macos-operator-transfer.mjs';
 
 const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
@@ -155,4 +155,64 @@ test('negative operator fixtures require actual OS picker cancellation, overflow
   assert.match(native,/if\(exclusiveExport\(payload,destination\)!=87\)return 89;/);
   assert.match(native,/if\(!after\|\|!\[after isEqualToData:expected\]\)return 89;/);
   assert.ok(!source('src/mcp-gateway.mjs').includes('fixture-export-overwrite'));
+});
+
+test('negative native diagnostic receipts reject target resolution, cancellation, and unrelated file selection',()=>{
+  const allowed={
+    'symlink-open':'BBX_OPERATOR_SYMLINK_OPEN_DENIED\n',
+    'symlink-picker':'BBX_OPERATOR_SYMLINK_PICKER_DENIED\n',
+    'wrong-picker':'BBX_OPERATOR_WRONG_FIXTURE_DENIED\n'
+  };
+  const receipt=stdout=>({
+    status:0,signal:null,error:null,stderr:'',stdout
+  });
+  for(const [mode,marker] of Object.entries(allowed)){
+    assert.equal(assessOperatorNegativeFixture(mode,receipt(marker)),true);
+    for(const candidate of [
+      {...receipt(marker),status:88},
+      {...receipt(marker),signal:'SIGKILL'},
+      {...receipt(marker),stderr:'unexpected diagnostic'},
+      {...receipt(marker),stdout:marker+'extra'},
+      {...receipt(marker),stdout:''}
+    ])assert.throws(()=>assessOperatorNegativeFixture(mode,candidate),
+      /NOT ACCEPTED/);
+  }
+  assert.throws(()=>assessOperatorNegativeFixture('symlink-picker',{
+    ...receipt('BBX_OPERATOR_SYMLINK_PICKER_RESOLVED_TARGET\n'),status:88
+  }),/INCONCLUSIVE/);
+  assert.throws(()=>assessOperatorNegativeFixture('symlink-picker',{
+    ...receipt('BBX_OPERATOR_SYMLINK_PICKER_CANCELLED\n'),status:88
+  }),/NOT ACCEPTED/);
+  assert.throws(()=>assessOperatorNegativeFixture('wrong-picker',{
+    ...receipt('BBX_OPERATOR_WRONG_PICKER_OTHER_SELECTION\n'),status:88
+  }),/NOT ACCEPTED/);
+  assert.throws(()=>assessOperatorNegativeFixture('unknown',receipt('')),
+    /Unsupported/);
+});
+test('macro-gated negative fixture paths reuse actual source validation and cannot dispatch to XPC',()=>{
+  const wrapper=source('examples/mcp-macos-operator-transfer.mjs');
+  const native=source('native/macos/xpc/OperatorTransferHost.m');
+  assert.match(wrapper,/const negativeFixture=\\['fixture-symlink','fixture-wrong-selection'\\]/);
+  assert.match(wrapper,/-DBBX_OPERATOR_NEGATIVE_DIAGNOSTICS=1/);
+  assert.match(wrapper,/symlinkSync\\('bbx-test-target\\.txt',link\\)/);
+  assert.match(wrapper,/negative-fixtures\\.jsonl/);
+  assert.match(wrapper,/assessOperatorNegativeFixture\\(label,observed\\)/);
+  assert.match(wrapper,/test-symlink-open/);
+  assert.match(wrapper,/test-symlink-panel/);
+  assert.match(wrapper,/test-wrong-panel/);
+  assert.match(native,/#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS/);
+  assert.match(native,/errno!=ELOOP/);
+  assert.match(native,/selectedRegularText\\(negativeFileURL\\(link\\),NULL,&why\\)/);
+  assert.match(native,/selectedRegularText\\(url,NULL,&why\\)/);
+  assert.match(native,/selectedRegularText\\(url,allowed,&why\\)/);
+  assert.match(native,/strcmp\\(why,"FIXTURE_MISMATCH"\\)/);
+  assert.match(native,/selected\\.st_ino==l\\.st_ino/);
+  assert.match(native,/selected\\.st_ino!=w\\.st_ino/);
+  const main=native.slice(native.indexOf('int main('));
+  assert.ok(main.indexOf('#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS')>=0);
+  assert.ok(main.indexOf('#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS')<
+    main.indexOf('xpc_connection_create'));
+  const normal=wrapper.indexOf('// Fixture path is created by THIS local harness');
+  assert.ok(wrapper.indexOf('if(negativeFixture)')<normal);
+  assert.ok(wrapper.indexOf('if(negativeFixture)')>wrapper.indexOf('if(buildOnly)'));
 });
