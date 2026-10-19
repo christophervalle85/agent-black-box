@@ -65,7 +65,7 @@ These commands presume a **previously installed, explicitly signed local app** a
 
 **My trust boundary:** The ordinary Node gateway/controller and its audit HMAC key are not sandboxed or protected from a sufficiently capable same-user adversary. The XPC worker is restricted to synthetic `bbx-test-*.txt` notes; my operator-selected file transfer is a **separate experiment**, not an MCP capability. Local development signing, a same-user trust pin, and verified Mac runtime tests are not equivalent to independent audit custody, race-complete real-document recovery, or notarized release.
 
-**Acceptance evidence:** [final native matrix](docs/v0.8-final-native-acceptance.md), [operator-transfer procedure](docs/v0.8-operator-transfer.md), [integrated Keychain RSA suite](docs/v0.8-security-acceptance.md), and [chronological macOS sandbox research](docs/MACOS_SANDBOX_V08.md). I passed the full Node suite earlier, but the **latest full `npm test` after my test-diagnostic additions has not yet been confirmed**; the new interactive native fixtures themselves passed on my Mac.
+**Acceptance evidence:** [final native matrix](docs/v0.8-final-native-acceptance.md), [operator-transfer procedure](docs/v0.8-operator-transfer.md), [integrated Keychain RSA suite](docs/v0.8-security-acceptance.md), and [chronological macOS sandbox research](docs/MACOS_SANDBOX_V08.md). My latest shared **post-diagnostic** local `npm test` output reported **251 passed, 0 failed**; both interactive native negative fixtures separately passed on my Mac. The test transcript did not include an exact Git commit ID, so I do not claim the suite ran against the subsequent documentation-only history rewrite.
 
 ## v0.7: Independently verifiable evidence and crash recovery
 
