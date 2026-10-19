@@ -395,7 +395,7 @@ async function auditedHandoff(host,dir,{
   if(signController)console.log('PASS: Native controller signing nonce was durably consumed: a second signer process refused identical review without reissuing a signature.');
   if(signController)console.log('PASS: Pre-enrolled macOS Keychain RSA controller identity signed the exact synthetic audited handoff; genuine signed-field mutations were rejected before host Touch ID/XPC and no private key bytes reached Node.');
   console.log(signController?
-    'NOTE: Persistent Keychain identity and native biometric consent tested with synthetic data. This signer does not independently authenticate the Node HMAC checkpoint; same-user Keychain access and production controller authority are NOT proven. Real import/export remains disabled.':
+    'NOTE: Persistent Keychain identity and native biometric consent tested with synthetic data. The native signer independently recomputes the HMAC audit checkpoint, but Node controls the audit secret and local files; same-user Keychain access and production controller authority are NOT proven. Real import/export remains disabled.':
     restart?
     'NOTE: Controlled worker exit and relaunch tested with fixed synthetic bytes. Production controller identity, trusted UI and actual import/export remain disabled.':
     durable?
