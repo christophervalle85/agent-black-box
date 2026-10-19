@@ -16,7 +16,12 @@ const appVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).
 const publicFiles = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
-  '/styles.css': ['styles.css', 'text/css; charset=utf-8']
+  '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
+  // My guided portfolio walkthrough is static and cannot call guarded tools.
+  '/showcase': ['showcase.html', 'text/html; charset=utf-8'],
+  '/showcase.js': ['showcase.js', 'application/javascript; charset=utf-8'],
+  '/showcase.css': ['showcase.css', 'text/css; charset=utf-8'],
+  '/showcase-scenarios.mjs': ['showcase-scenarios.mjs', 'application/javascript; charset=utf-8']
 };
 
 function sendJson(res, status, data) {
