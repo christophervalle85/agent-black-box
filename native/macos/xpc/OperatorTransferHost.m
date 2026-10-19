@@ -191,7 +191,13 @@ static int importSelected(xpc_connection_t peer,const char *fixture){
         panel.directoryURL=[NSURL fileURLWithPath:
             [expected stringByDeletingLastPathComponent] isDirectory:YES];
     }
-    if([panel runModal]!=NSModalResponseOK)return 83;
+    if([panel runModal]!=NSModalResponseOK){
+        if(fixture){
+            puts("BBX_OPERATOR_IMPORT_CANCELLED_PICKER");
+            fflush(stdout);
+        }
+        return 83;
+    }
     const char *snapshotReason=NULL;
     NSData *snapshot=selectedRegularText([panel URLs].firstObject,
                                          fixture,&snapshotReason);
