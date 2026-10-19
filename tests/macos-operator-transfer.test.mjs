@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {assessOperatorTransfer,summarizeNativeBuildFailure}
+import {assessOperatorTransfer,assessOperatorImportDenial,
+  summarizeNativeBuildFailure}
   from '../examples/mcp-macos-operator-transfer.mjs';
 
 const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
@@ -97,4 +98,41 @@ test('macOS native operator host uses manual XPC lifetime and exposes redacted C
   assert.equal(summarizeNativeBuildFailure('ld: library not found for -lxyz\n'),
     'linker/compiler: library not found for -lxyz');
   assert.match(summarizeNativeBuildFailure('nonspecific error'),/No recognized compiler/);
+});
+
+test('native import failure reasons are strict, fixed and pre-dispatch only',()=>{
+  const event=label=>({
+    status:87,signal:null,error:null,stderr:'',
+    stdout:'BBX_OPERATOR_IMPORT_DENIED_'+label+'\\n'
+  });
+  for(const label of ['SOURCE_URL','SOURCE_PATH','SOURCE_OPEN',
+    'SOURCE_POLICY','SOURCE_SIZE','SOURCE_CHANGED','SOURCE_TEXT',
+    'SOURCE_CLOSE','FIXTURE_MISMATCH','XPC_SETUP','NOTE_SCHEMA']){
+    const result=event(label);
+    result.stdout=result.stdout.replace('\\\\n','\\n');
+    assert.equal(assessOperatorImportDenial(result),label);
+    assert.throws(()=>assessOperatorTransfer('import',result));
+  }
+  for(const result of [
+    {...event('SOURCE_SIZE'),status:0},
+    {...event('SOURCE_SIZE'),signal:'SIGKILL'},
+    {...event('SOURCE_SIZE'),stderr:'unexpected'},
+    {...event('SOURCE_SIZE'),stdout:'BBX_OPERATOR_IMPORT_DENIED_UNRECOGNIZED\\n'},
+    {...event('SOURCE_SIZE'),stdout:'BBX_OPERATOR_IMPORT_DENIED_SOURCE_SIZE\\nextra'},
+    {...event('SOURCE_SIZE'),stdout:''}
+  ])assert.equal(assessOperatorImportDenial(result),null);
+});
+test('generated import fixture is selected by exact inode and never bypasses native panel',()=>{
+  const native=source('native/macos/xpc/OperatorTransferHost.m');
+  const script=source('examples/mcp-macos-operator-transfer.mjs');
+  assert.ok(script.includes("const fixtureImport=mode==='fixture-import'"));
+  assert.ok(script.includes("writeFileSync(fixture,'BBX disposable operator transfer fixture"));
+  assert.ok(script.includes("fixtureImport?['import-fixture',fixture]"));
+  assert.ok(native.includes('panel.directoryURL=[NSURL fileURLWithPath:'));
+  assert.ok(native.includes('if([panel runModal]!=NSModalResponseOK)return 83;'));
+  assert.ok(native.includes('expected.st_dev!=before.st_dev'));
+  assert.ok(native.includes('expected.st_ino!=before.st_ino'));
+  assert.ok(native.includes('if(!snapshot)return denyImport('));
+  assert.ok(native.includes('bbx_test')===false);
+  assert.ok(!source('src/mcp-gateway.mjs').includes('fixture-import'));
 });
