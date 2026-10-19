@@ -18,7 +18,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <limits.h>
-#ifdef BBX_TEST_PEER_REQUIREMENT
+#if defined(BBX_TEST_PEER_REQUIREMENT) || defined(BBX_NATIVE_REQUIRED_MCP)
 #include "PeerRequirementGate.h"
 #endif
 
@@ -57,6 +57,16 @@ int main(void){
     xpc_connection_t connection=xpc_connection_create(serviceName,
                                                        dispatch_get_global_queue(QOS_CLASS_DEFAULT,0));
     if(!connection)return 70;
+#ifdef BBX_NATIVE_REQUIRED_MCP
+    /* Release-candidate MCP route: actual OS enforcement before resume.
+       No UID/PID fallback and no acceptance on unsupported macOS. */
+    if(bbx_install_same_team_peer_requirement(
+       connection,"dev.agentblackbox.xpc-authority.worker")!=0){
+        xpc_connection_cancel(connection);
+        xpc_release(connection);
+        return 85;
+    }
+#endif
 #ifdef BBX_TEST_PEER_REQUIREMENT
     // This alternate build is ONLY for the ad-hoc negative acceptance probe.
     // A production host must invoke an equivalent gate unconditionally,
@@ -88,7 +98,12 @@ int main(void){
         }
         const bool writeOp=strcmp(op,"WRITE")==0;
         const bool readOp=strcmp(op,"READ")==0;
+#ifdef BBX_NATIVE_REQUIRED_MCP
+        /* Required-mode clients cannot delete worker files. */
+        const bool removeOp=false;
+#else
         const bool removeOp=strcmp(op,"REMOVE")==0;
+#endif
         const bool rootOp=strcmp(op,"ROOT")==0;
         if((!writeOp&&!readOp&&!removeOp&&!rootOp)||
            (writeOp && declared<1) || (!writeOp&&declared!=0)) {
