@@ -135,3 +135,22 @@ test('generated import fixture is selected by exact inode and never bypasses nat
   assert.ok(native.includes('bbx_test')===false);
   assert.ok(!source('src/mcp-gateway.mjs').includes('fixture-import'));
 });
+
+test('negative operator fixtures require actual OS picker cancellation, overflow rejection and no-clobber',()=>{
+  const wrapper=source('examples/mcp-macos-operator-transfer.mjs');
+  const native=source('native/macos/xpc/OperatorTransferHost.m');
+  for(const mode of ['fixture-cancel','fixture-oversize','fixture-export-overwrite'])
+    assert.ok(wrapper.includes(mode));
+  assert.match(wrapper,/strictPickerCancel/);
+  assert.match(wrapper,/BBX_OPERATOR_IMPORT_CANCELLED_PICKER/);
+  assert.match(wrapper,/mode==='fixture-oversize'&&reason==='SOURCE_SIZE'/);
+  assert.match(wrapper,/BBX_OPERATOR_EXPORT_OVERWRITE_DENIED/);
+  assert.match(wrapper,/readFileSync\(existing,'utf8'\)===existingBytes/);
+  assert.match(wrapper,/MAC_OPERATOR_TRANSFER_OVERWRITE_DENIED/);
+  assert.match(native,/puts\("BBX_OPERATOR_IMPORT_CANCELLED_PICKER"\)/);
+  assert.match(native,/rejectExistingExport\(xpc_connection_t peer,/);
+  assert.match(native,/const char sentinel\[\]="BBX existing destination preserved\\n";/);
+  assert.match(native,/if\(exclusiveExport\(payload,destination\)!=87\)return 89;/);
+  assert.match(native,/if\(!after\|\|!\[after isEqualToData:expected\]\)return 89;/);
+  assert.ok(!source('src/mcp-gateway.mjs').includes('fixture-export-overwrite'));
+});
