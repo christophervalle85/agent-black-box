@@ -276,6 +276,30 @@ static int exclusiveExport(NSData *payload,NSURL *url){
     if(close(dir)!=0)status=89;
     return status;
 }
+/* Independent non-destructive negative gate: the wrapper creates this
+   preexisting disposable fixture. Verify exact known bytes and inode before
+   and after exclusiveExport refuses O_EXCL. No picker or biometric prompt
+   is required because no export is authorized. */
+static int rejectExistingExport(xpc_connection_t peer,
+                                const char *name,const char *path){
+    const char sentinel[]="BBX existing destination preserved\n";
+    if(!safeName(name)||!path||path[0]!='/'||
+       strnlen(path,PATH_MAX)>=PATH_MAX)return 90;
+    NSURL *destination=[NSURL fileURLWithPath:
+        [NSString stringWithUTF8String:path]];
+    const char *reason=NULL;
+    NSData *before=selectedRegularText(destination,NULL,&reason);
+    NSData *expected=[NSData dataWithBytes:sentinel length:sizeof(sentinel)-1];
+    if(!before||![before isEqualToData:expected])return 90;
+    NSData *payload=readNote(peer,name);
+    if(!payload)return 90;
+    if(exclusiveExport(payload,destination)!=87)return 89;
+    NSData *after=selectedRegularText(destination,NULL,&reason);
+    if(!after||![after isEqualToData:expected])return 89;
+    puts("BBX_OPERATOR_EXPORT_OVERWRITE_DENIED");
+    fflush(stdout);
+    return 0;
+}
 static int exportSelected(xpc_connection_t peer,const char *name){
     if(!safeName(name))return 87;
     NSData *content=readNote(peer,name);
@@ -302,13 +326,16 @@ static int exportSelected(xpc_connection_t peer,const char *name){
 }
 int main(int argc,const char *argv[]){
     @autoreleasepool {
-        if(argc<2||argc>3)return 90;
+        if(argc<2||argc>4)return 90;
         const BOOL importing=argc==2&&strcmp(argv[1],"import")==0;
         const BOOL fixtureImport=argc==3&&
                                  strcmp(argv[1],"import-fixture")==0;
         const BOOL exporting=argc==3&&strcmp(argv[1],"export")==0&&
                              safeName(argv[2]);
-        if(!importing&&!fixtureImport&&!exporting)return 90;
+        const BOOL denyExisting=argc==4&&
+                                strcmp(argv[1],"export-overwrite-test")==0&&
+                                safeName(argv[2]);
+        if(!importing&&!fixtureImport&&!exporting&&!denyExisting)return 90;
         if(fixtureImport&&(!argv[2]||argv[2][0]!='/'||
                           strnlen(argv[2],PATH_MAX)>=PATH_MAX))
             return denyImport("FIXTURE_PATH");
@@ -325,6 +352,7 @@ int main(int argc,const char *argv[]){
         xpc_connection_resume(peer);
         int result=(importing||fixtureImport)?
             importSelected(peer,fixtureImport?argv[2]:NULL):
+            denyExisting?rejectExistingExport(peer,argv[2],argv[3]):
             exportSelected(peer,argv[2]);
         xpc_connection_cancel(peer);
         xpc_release(peer);
