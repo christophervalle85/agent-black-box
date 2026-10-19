@@ -192,22 +192,22 @@ test('negative native diagnostic receipts reject target resolution, cancellation
 test('macro-gated negative fixture paths reuse actual source validation and cannot dispatch to XPC',()=>{
   const wrapper=source('examples/mcp-macos-operator-transfer.mjs');
   const native=source('native/macos/xpc/OperatorTransferHost.m');
-  assert.match(wrapper,/const negativeFixture=\\['fixture-symlink','fixture-wrong-selection'\\]/);
+  assert.match(wrapper,/const negativeFixture=\['fixture-symlink','fixture-wrong-selection'\]/);
   assert.match(wrapper,/-DBBX_OPERATOR_NEGATIVE_DIAGNOSTICS=1/);
-  assert.match(wrapper,/symlinkSync\\('bbx-test-target\\.txt',link\\)/);
-  assert.match(wrapper,/negative-fixtures\\.jsonl/);
-  assert.match(wrapper,/assessOperatorNegativeFixture\\(label,observed\\)/);
+  assert.match(wrapper,/symlinkSync\('bbx-test-target\.txt',link\)/);
+  assert.match(wrapper,/negative-fixtures\.jsonl/);
+  assert.match(wrapper,/assessOperatorNegativeFixture\(label,observed\)/);
   assert.match(wrapper,/test-symlink-open/);
   assert.match(wrapper,/test-symlink-panel/);
   assert.match(wrapper,/test-wrong-panel/);
   assert.match(native,/#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS/);
   assert.match(native,/errno!=ELOOP/);
-  assert.match(native,/selectedRegularText\\(negativeFileURL\\(link\\),NULL,&why\\)/);
-  assert.match(native,/selectedRegularText\\(url,NULL,&why\\)/);
-  assert.match(native,/selectedRegularText\\(url,allowed,&why\\)/);
-  assert.match(native,/strcmp\\(why,"FIXTURE_MISMATCH"\\)/);
-  assert.match(native,/selected\\.st_ino==l\\.st_ino/);
-  assert.match(native,/selected\\.st_ino!=w\\.st_ino/);
+  assert.match(native,/selectedRegularText\(negativeFileURL\(link\),NULL,&why\)/);
+  assert.match(native,/selectedRegularText\(url,NULL,&why\)/);
+  assert.match(native,/selectedRegularText\(url,allowed,&why\)/);
+  assert.match(native,/strcmp\(why,"FIXTURE_MISMATCH"\)/);
+  assert.match(native,/selected\.st_ino==l\.st_ino/);
+  assert.match(native,/selected\.st_ino!=w\.st_ino/);
   const main=native.slice(native.indexOf('int main('));
   assert.ok(main.indexOf('#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS')>=0);
   assert.ok(main.indexOf('#ifdef BBX_OPERATOR_NEGATIVE_DIAGNOSTICS')<
