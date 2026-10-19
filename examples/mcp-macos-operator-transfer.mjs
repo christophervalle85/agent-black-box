@@ -11,7 +11,8 @@
  * and audit keys are still same-user local, not independent trust anchors.
  */
 import {spawnSync} from 'node:child_process';
-import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync,readFileSync} from 'node:fs';
+import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync,readFileSync,
+  symlinkSync,lstatSync,readlinkSync} from 'node:fs';
 import {homedir,tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -34,6 +35,26 @@ const allowedDenials=new Set([
   'SOURCE_CHANGED','SOURCE_TEXT','SOURCE_CLOSE','SOURCE_UNKNOWN',
   'NOTE_SCHEMA','NOTE_ENCODING'
 ]);
+const negativeMarkers=Object.freeze({
+  'symlink-open':'BBX_OPERATOR_SYMLINK_OPEN_DENIED\\n',
+  'symlink-picker':'BBX_OPERATOR_SYMLINK_PICKER_DENIED\\n',
+  'wrong-picker':'BBX_OPERATOR_WRONG_FIXTURE_DENIED\\n'
+});
+/** Test-only results: cancellation, incorrect selection and target resolution
+ * must not be accepted as a successful filesystem-boundary test. */
+export function assessOperatorNegativeFixture(mode,observed){
+  if(!Object.hasOwn(negativeMarkers,mode))
+    throw Error('Unsupported native negative fixture.');
+  if(mode==='symlink-picker'&&observed?.status===88&&
+     observed.stdout==='BBX_OPERATOR_SYMLINK_PICKER_RESOLVED_TARGET\\n'&&
+     observed.stderr===''&&!observed.signal&&!observed.error)
+    throw Error('INCONCLUSIVE: AppKit returned the symlink target inode, not the link. No Touch ID or XPC write was attempted.');
+  if(!observed||observed.error||observed.signal||
+     observed.status!==0||observed.stderr!==''||
+     observed.stdout!==negativeMarkers[mode])
+    throw Error('Native '+mode+' negative fixture NOT ACCEPTED: expected exact denial, not cancellation, a different selection, or an unexpected outcome.');
+  return true;
+}
 export function assessOperatorImportDenial(observed){
   if(!observed||observed.status!==87||observed.error||
      observed.signal||observed.stderr!==''||
@@ -103,7 +124,7 @@ function requireSandbox(worker){
      /<key>com\.apple\.security\.network\.(client|server)<\/key>\s*<true\s*\/>/.test(output))
     throw Error('Signed XPC worker must be sandboxed with no network entitlement.');
 }
-function build(temp,identity){
+function build(temp,identity,{negativeDiagnostics=false}={}){
   const app=join(temp,'BlackBoxOperatorTransferHost.app');
   const host=join(app,'Contents','MacOS','BlackBoxOperatorTransferHost');
   const service=join(app,'Contents','XPCServices','BlackBoxAuthorityWorker.xpc');
@@ -115,7 +136,8 @@ function build(temp,identity){
   copyFileSync(join(native,'AuthorityService-Info.plist'),
                join(service,'Contents','Info.plist'));
   const flags=['-std=c11','-fblocks','-O2','-Wall','-Wextra',
-    '-Werror=implicit-function-declaration'];
+    '-Werror=implicit-function-declaration',
+    ...(negativeDiagnostics?['-DBBX_OPERATOR_NEGATIVE_DIAGNOSTICS=1']:[])];
   // xpc_object_t requires explicit xpc_release() in this C/ObjC host.
   // ARC and manual XPC lifetime management must not be mixed.
   command('/usr/bin/xcrun',['clang',...flags,'-o',host,
@@ -165,20 +187,76 @@ async function main(){
   const buildOnly=mode==='build-check'&&process.argv.length===3;
   const fixtureImport=['fixture-import','fixture-oversize','fixture-cancel']
     .includes(mode)&&process.argv.length===3;
+  const negativeFixture=['fixture-symlink','fixture-wrong-selection']
+    .includes(mode)&&process.argv.length===3;
   const rejectOverwrite=mode==='fixture-export-overwrite'&&
     process.argv.length===4&&note.test(name??'');
-  if(!buildOnly&&!fixtureImport&&!rejectOverwrite&&(!(['import','export'].includes(mode))||
+  if(!buildOnly&&!fixtureImport&&!negativeFixture&&!rejectOverwrite&&(!(['import','export'].includes(mode))||
      (mode==='import'&&process.argv.length!==3)||
      (mode==='export'&&(process.argv.length!==4||!note.test(name)))))
-    throw Error('Use build-check, fixture-import, fixture-cancel, fixture-oversize, import, export <note>, or fixture-export-overwrite <note>.');
+    throw Error('Use build-check, fixture-import, fixture-cancel, fixture-oversize, fixture-symlink, fixture-wrong-selection, import, export <note>, or fixture-export-overwrite <note>.');
   const identity=selectLocalDevelopmentIdentity(command('/usr/bin/security',[
     'find-identity','-v','-p','codesigning'
   ],'Apple Development identity lookup').stdout);
   const temp=mkdtempSync(join(tmpdir(),'bbx-native-operator-transfer-'));
   try {
-    const host=build(temp,identity);
+    const host=build(temp,identity,{negativeDiagnostics:negativeFixture});
     if(buildOnly){
       console.log('PASS: Operator native host compiled; Apple Development host/XPC signatures, Team IDs and App Sandbox entitlements verified. No picker, Touch ID, transfer or HMAC audit was launched.');
+      return;
+    }
+    if(negativeFixture){
+      // Test data and its paths exist only in this private disposable folder.
+      // No real source is imported, Touch ID is never requested, and the XPC
+      // service is never connected by these macro-gated native entry points.
+      const nativeDiagnostic=(args,label)=>{
+        const observed=spawnSync(host,args,{
+          encoding:'utf8',timeout:130000,maxBuffer:4096,
+          env:{PATH:'/usr/bin:/bin',LANG:'C',HOME:homedir(),TMPDIR:tmpdir()}
+        });
+        assessOperatorNegativeFixture(label,observed);
+      };
+      const audit=new AuditStore(join(temp,'negative-fixtures.jsonl'),{
+        externalReceiptFile:null
+      });
+      if(mode==='fixture-symlink'){
+        const target=join(temp,'bbx-test-target.txt');
+        const link=join(temp,'bbx-test-link.txt');
+        const content='BBX disposable symlink target\\n';
+        writeFileSync(target,content,{mode:0o600,flag:'wx'});
+        symlinkSync('bbx-test-target.txt',link);
+        if(!lstatSync(link).isSymbolicLink()||
+           !lstatSync(target).isFile()||
+           readlinkSync(link)!=='bbx-test-target.txt'||
+           readFileSync(target,'utf8')!==content)
+          throw Error('Disposable symlink fixture not established.');
+        nativeDiagnostic(['test-symlink-open',link,target],'symlink-open');
+        auditEvent(audit,'MAC_OPERATOR_SYMLINK_OPEN_DENIED','block','blocked',
+          'O_NOFOLLOW denied exact disposable symbolic-link source; no XPC or Touch ID.');
+        console.log('PASS: Native selected-file opener rejected the exact disposable symlink with O_NOFOLLOW; no picker, Touch ID or XPC.');
+        console.log('ACTION: In the native picker select ONLY bbx-test-link.txt (symbolic link); do not select the regular target or approve Touch ID.');
+        nativeDiagnostic(['test-symlink-panel',link,target],'symlink-picker');
+        auditEvent(audit,'MAC_OPERATOR_SYMLINK_PICKER_DENIED','block','blocked',
+          'AppKit returned exact link inode; native opener rejected it before Touch ID/XPC.');
+        console.log('PASS: AppKit returned the selected symlink inode and the native source opener rejected it before Touch ID or XPC.');
+      }else{
+        const allowed=join(temp,'bbx-test-allowed.txt');
+        const wrong=join(temp,'bbx-test-other.txt');
+        writeFileSync(allowed,'BBX allowed disposable fixture\\n',
+          {mode:0o600,flag:'wx'});
+        writeFileSync(wrong,'BBX intentionally wrong disposable fixture\\n',
+          {mode:0o600,flag:'wx'});
+        if(!lstatSync(allowed).isFile()||!lstatSync(wrong).isFile()||
+           lstatSync(allowed).ino===lstatSync(wrong).ino)
+          throw Error('Distinct disposable fixture files not established.');
+        console.log('ACTION: In the native picker select ONLY bbx-test-other.txt (the WRONG fixture). Do not select allowed file or approve Touch ID.');
+        nativeDiagnostic(['test-wrong-panel',allowed,wrong],'wrong-picker');
+        auditEvent(audit,'MAC_OPERATOR_WRONG_FIXTURE_DENIED','block','blocked',
+          'Independently verified wrong-file inode denied by native FIXTURE_MISMATCH before Touch ID/XPC.');
+        console.log('PASS: Exact wrong fixture selection produced native FIXTURE_MISMATCH before Touch ID or XPC.');
+      }
+      audit.verify();
+      console.log('PASS: Disposable negative-fixture HMAC audit verified; no files or paths imported into XPC.');
       return;
     }
     // Fixture path is created by THIS local harness, never read from an
