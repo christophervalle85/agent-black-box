@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {assessOperatorTransfer}
+import {assessOperatorTransfer,summarizeNativeBuildFailure}
   from '../examples/mcp-macos-operator-transfer.mjs';
 
 const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
@@ -77,4 +77,24 @@ test('unsigned, ad-hoc or automatic feature branch CI cannot silently enable tra
   assert.ok(ci.includes('branches: [main]'));
   assert.ok(!ci.includes("'feature/v0.8-*'"));
   assert.ok(!req.includes('mcp-macos-operator-transfer.mjs'));
+});
+
+test('macOS native operator host uses manual XPC lifetime and exposes redacted Clang build errors',()=>{
+  const runner=source('examples/mcp-macos-operator-transfer.mjs');
+  assert.match(runner,/const buildOnly=mode==='build-check'/);
+  assert.match(runner,/if\(buildOnly\)\{/);
+  assert.ok(runner.includes('No picker, Touch ID, transfer or HMAC audit was launched.'));
+  const hostBuild=runner.slice(
+    runner.indexOf("command('/usr/bin/xcrun',['clang',...flags"),
+    runner.indexOf("command('/usr/bin/xcrun',['clang',...flags")+290
+  );
+  assert.ok(hostBuild.includes("OperatorTransferHost.m"));
+  assert.ok(!hostBuild.includes("'-fobjc-arc'"));
+  const path='/Users/hidden/work/agent-black-box/native/macos/xpc/OperatorTransferHost.m';
+  const issue=summarizeNativeBuildFailure(path+':174:8: error: ARC forbids explicit message send of release\n');
+  assert.equal(issue,'OperatorTransferHost.m:174:8: error: ARC forbids explicit message send of release');
+  assert.ok(!issue.includes('/Users/hidden/'));
+  assert.equal(summarizeNativeBuildFailure('ld: library not found for -lxyz\n'),
+    'linker/compiler: library not found for -lxyz');
+  assert.match(summarizeNativeBuildFailure('nonspecific error'),/No recognized compiler/);
 });
