@@ -101,15 +101,14 @@ test('macOS native operator host uses manual XPC lifetime and exposes redacted C
 });
 
 test('native import failure reasons are strict, fixed and pre-dispatch only',()=>{
+  const marker=label=>'BBX_OPERATOR_IMPORT_DENIED_'+label+String.fromCharCode(10);
   const event=label=>({
-    status:87,signal:null,error:null,stderr:'',
-    stdout:'BBX_OPERATOR_IMPORT_DENIED_'+label+'\\n'
+    status:87,signal:null,error:null,stderr:'',stdout:marker(label)
   });
   for(const label of ['SOURCE_URL','SOURCE_PATH','SOURCE_OPEN',
     'SOURCE_POLICY','SOURCE_SIZE','SOURCE_CHANGED','SOURCE_TEXT',
     'SOURCE_CLOSE','FIXTURE_MISMATCH','XPC_SETUP','NOTE_SCHEMA']){
     const result=event(label);
-    result.stdout=result.stdout.replace('\\\\n','\\n');
     assert.equal(assessOperatorImportDenial(result),label);
     assert.throws(()=>assessOperatorTransfer('import',result));
   }
@@ -117,8 +116,8 @@ test('native import failure reasons are strict, fixed and pre-dispatch only',()=
     {...event('SOURCE_SIZE'),status:0},
     {...event('SOURCE_SIZE'),signal:'SIGKILL'},
     {...event('SOURCE_SIZE'),stderr:'unexpected'},
-    {...event('SOURCE_SIZE'),stdout:'BBX_OPERATOR_IMPORT_DENIED_UNRECOGNIZED\\n'},
-    {...event('SOURCE_SIZE'),stdout:'BBX_OPERATOR_IMPORT_DENIED_SOURCE_SIZE\\nextra'},
+    {...event('SOURCE_SIZE'),stdout:marker('UNRECOGNIZED')},
+    {...event('SOURCE_SIZE'),stdout:marker('SOURCE_SIZE')+'extra'},
     {...event('SOURCE_SIZE'),stdout:''}
   ])assert.equal(assessOperatorImportDenial(result),null);
 });
