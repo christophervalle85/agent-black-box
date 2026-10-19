@@ -182,28 +182,59 @@ static int importSelected(xpc_connection_t peer){
 }
 static int exclusiveExport(NSData *payload,NSURL *url){
     if(!url||![url isFileURL])return 87;
-    const char *path=[url fileSystemRepresentation];
-    if(!path||path[0]!='/'||strnlen(path,PATH_MAX)>=PATH_MAX)return 87;
-    /* No overwrite, symlink-follow, or implicit permission to modify an
-       existing user file. A partial created file is left for reconciliation. */
-    int fd=open(path,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
-    if(fd<0)return 87;
+    NSURL *parentURL=[url URLByDeletingLastPathComponent];
+    const char *folder=[parentURL fileSystemRepresentation];
+    const char *leaf=[[url lastPathComponent] fileSystemRepresentation];
+    if(!folder||folder[0]!='/'||strnlen(folder,PATH_MAX)>=PATH_MAX||
+       !leaf||leaf[0]=='\0'||strlen(leaf)>255||
+       strcmp(leaf,".")==0||strcmp(leaf,"..")==0||
+       strchr(leaf,'/')!=NULL)return 87;
+    /* Hold the human-selected parent directory descriptor across create,
+       readback and fsync. Never follow a destination leaf symlink or
+       overwrite a preexisting user file. */
+    int dir=open(folder,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    if(dir<0)return 87;
     int status=0;
+    int fd=openat(dir,leaf,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+    if(fd<0){close(dir);return 87;}
+    struct stat created={0};
+    if(fstat(fd,&created)!=0||!S_ISREG(created.st_mode)||
+       created.st_uid!=geteuid()||created.st_nlink!=1||
+       (created.st_mode&0777)!=0600)status=89;
     size_t off=0;
     const unsigned char *data=[payload bytes];
-    while(off<[payload length]){
+    while(status==0&&off<[payload length]){
         ssize_t n=write(fd,data+off,[payload length]-off);
         if(n<=0){status=89;break;}
         off+=(size_t)n;
     }
     if(status==0&&fsync(fd)!=0)status=89;
     if(close(fd)!=0)status=89;
-    if(status!=0)return status;
-    NSString *folder=[[url URLByDeletingLastPathComponent] path];
-    int dir=open([folder fileSystemRepresentation],
-                 O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-    if(dir<0)return 89;
-    if(fsync(dir)!=0)status=89;
+    /* Do not unlink on failure: an already created destination can be a
+       partial or committed file and must be reconciled manually. */
+    if(status==0){
+        int verify=openat(dir,leaf,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+        if(verify<0)status=89;
+        else{
+            struct stat observed={0};
+            unsigned char readback[2001]={0};
+            size_t used=0;
+            if(fstat(verify,&observed)!=0||!S_ISREG(observed.st_mode)||
+               observed.st_dev!=created.st_dev||
+               observed.st_ino!=created.st_ino||
+               observed.st_nlink!=1||
+               observed.st_size!=(off_t)[payload length])status=89;
+            while(status==0&&used<[payload length]){
+                ssize_t n=read(verify,readback+used,[payload length]-used);
+                if(n<=0){status=89;break;}
+                used+=(size_t)n;
+            }
+            if(status==0&&memcmp(readback,data,used)!=0)status=89;
+            memset(readback,0,sizeof(readback));
+            if(close(verify)!=0)status=89;
+        }
+    }
+    if(status==0&&fsync(dir)!=0)status=89;
     if(close(dir)!=0)status=89;
     return status;
 }
