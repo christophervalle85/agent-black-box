@@ -1,6 +1,6 @@
-# Agent Black Box · v0.8 development
+# MCP Approval Gateway · v0.8 development
 
-**Local AI agent security observability:** Agent Black Box checks instrumented AI-tool operations against deterministic security policies before execution, records policy decisions in a local audit log, and displays activity in a live dashboard. Earlier releases introduced human approval, a guarded MCP stdio gateway, dual-era MCP support, Linux Bubblewrap isolation, and HMAC-protected audit logging. **v0.7 adds signed independent checkpoint receipts, crash-recovery journaling, and incident-status monitoring.**
+**Local AI agent security observability:** MCP Approval Gateway checks instrumented AI-tool operations against deterministic security policies before execution, records policy decisions in a local audit log, and displays activity in a live dashboard. Earlier releases introduced human approval, a guarded MCP stdio gateway, dual-era MCP support, Linux Bubblewrap isolation, and HMAC-protected audit logging. **v0.7 adds signed independent checkpoint receipts, crash-recovery journaling, and incident-status monitoring.**
 
 ![Status](https://img.shields.io/badge/branch-v0.8--dev-yellow) ![Node](https://img.shields.io/badge/Node-22%2B-green) ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 
